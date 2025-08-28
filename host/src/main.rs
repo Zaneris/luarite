@@ -20,13 +20,14 @@ fn main() -> Result<()> {
 
     // Shared exchange between Lua callbacks and engine update
     struct ScriptExchange {
-        transforms: Option<Vec<f64>>, // v2 flat array
+        transforms: Vec<f64>,         // v2 flat array (scratch, reused)
+        transforms_dirty: bool,
         sprites: Vec<SpriteV2>,       // parsed sprites
         textures: Vec<(u32, String)>, // queued texture loads (id, path)
     }
     impl Default for ScriptExchange {
         fn default() -> Self {
-            Self { transforms: None, sprites: Vec::new(), textures: Vec::new() }
+            Self { transforms: Vec::with_capacity(1024), transforms_dirty: false, sprites: Vec::with_capacity(1024), textures: Vec::new() }
         }
     }
     let exchange = Arc::new(Mutex::new(ScriptExchange::default()));
@@ -43,16 +44,18 @@ fn main() -> Result<()> {
     // Install engine namespace with sinks that fill the exchange
     {
         let ex1 = exchange.clone();
-        let set_transforms_cb = Rc::new(move |transforms: Vec<f64>| {
+        let set_transforms_cb = Rc::new(move |slice: &[f64]| {
             if let Ok(mut ex) = ex1.lock() {
-                ex.transforms = Some(transforms);
+                ex.transforms.clear();
+                ex.transforms.extend_from_slice(slice);
+                ex.transforms_dirty = true;
             }
         });
         let ex2 = exchange.clone();
-        let submit_sprites_cb = Rc::new(move |sprites: Vec<SpriteV2>| {
+        let submit_sprites_cb = Rc::new(move |sprites: &[SpriteV2]| {
             if let Ok(mut ex) = ex2.lock() {
                 ex.sprites.clear();
-                ex.sprites.extend(sprites);
+                ex.sprites.extend_from_slice(sprites);
             }
         });
         // Queue texture loads from Lua
@@ -100,6 +103,7 @@ fn main() -> Result<()> {
         let sandbox_for_update = sandbox.clone();
         let mut api_for_update = api; // move into closure to keep time updated
         let exchange_for_update = exchange.clone();
+        let mut sprites_scratch: Vec<SpriteData> = Vec::with_capacity(1024);
         window.set_script_on_update(move |dt, state| {
             // Advance engine time for Lua view
             api_for_update.update_time(dt);
@@ -124,22 +128,19 @@ fn main() -> Result<()> {
                         }
                     }
                 }
-                if let Some(transforms) = ex.transforms.take() {
-                    if let Err(e) = state.set_transforms(transforms) {
+                if ex.transforms_dirty {
+                    if let Err(e) = state.set_transforms_from_slice(&ex.transforms) {
                         tracing::error!("Failed to set transforms: {}", e);
                     }
+                    ex.transforms_dirty = false;
                 }
                 if !ex.sprites.is_empty() {
-                    let mut sprites: Vec<SpriteData> = Vec::with_capacity(ex.sprites.len());
+                    sprites_scratch.clear();
+                    sprites_scratch.reserve(ex.sprites.len());
                     for s in ex.sprites.drain(..) {
-                        sprites.push(SpriteData {
-                            entity_id: s.entity_id,
-                            texture_id: s.texture_id,
-                            uv: [s.u0, s.v0, s.u1, s.v1],
-                            color: [s.r, s.g, s.b, s.a],
-                        });
+                        sprites_scratch.push(SpriteData { entity_id: s.entity_id, texture_id: s.texture_id, uv: [s.u0, s.v0, s.u1, s.v1], color: [s.r, s.g, s.b, s.a] });
                     }
-                    if let Err(e) = state.submit_sprites(sprites) {
+                    if let Err(e) = state.append_sprites(&mut sprites_scratch) {
                         tracing::error!("Failed to submit sprites: {}", e);
                     }
                 }

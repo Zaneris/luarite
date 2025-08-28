@@ -435,8 +435,8 @@ impl EngineApi {
     pub fn setup_engine_namespace_with_sinks(
         &self,
         lua: &Lua,
-        set_transforms_cb: Rc<dyn Fn(Vec<f64>)>,
-        submit_sprites_cb: Rc<dyn Fn(Vec<SpriteV2>)>,
+        set_transforms_cb: Rc<dyn Fn(&[f64])>,
+        submit_sprites_cb: Rc<dyn Fn(&[SpriteV2])>,
     ) -> Result<()> {
         let globals = lua.globals();
 
@@ -454,6 +454,7 @@ impl EngineApi {
 
         // Override set_transforms (accepts a flat array table). First field can be EntityId or number.
         let st_cb = set_transforms_cb.clone();
+        let transforms_scratch = std::cell::RefCell::new(Vec::<f64>::with_capacity(1024));
         let transform_func = match lua.create_function(move |lua, arr: mlua::Table| {
             let len = arr.raw_len();
             if len % 6 != 0 {
@@ -462,7 +463,9 @@ impl EngineApi {
                     len % 6
                 )));
             }
-            let mut out: Vec<f64> = Vec::with_capacity(len);
+            let mut out = transforms_scratch.borrow_mut();
+            out.clear();
+            out.reserve(len);
             let mut i = 1;
             while i <= len {
                 // id can be EntityId userdata or a number
@@ -484,7 +487,7 @@ impl EngineApi {
                 let sy: f64 = arr.raw_get(i)?; i += 1; out.push(sy);
             }
             tracing::debug!("Setting {} transforms", out.len() / 6);
-            (st_cb)(out);
+            (st_cb)(&out);
             Ok(())
         }) {
             Ok(f) => f,
@@ -504,6 +507,7 @@ impl EngineApi {
 
         // Override submit_sprites and parse values into SpriteV2
         let sb_cb = submit_sprites_cb.clone();
+        let sprites_scratch = std::cell::RefCell::new(Vec::<SpriteV2>::with_capacity(1024));
         let sprite_func = match lua.create_function(move |lua, sprites: mlua::Table| {
             // Accept either an array table or a Vec<Value>
             let len = sprites.raw_len();
@@ -513,7 +517,9 @@ impl EngineApi {
                     len % 10
                 )));
             }
-            let mut out: Vec<SpriteV2> = Vec::with_capacity(len / 10);
+            let mut out = sprites_scratch.borrow_mut();
+            out.clear();
+            out.reserve(len / 10);
             let mut i = 1; // Lua arrays are 1-based
             while i <= len {
                 // entity (UserData EntityId)
@@ -568,7 +574,7 @@ impl EngineApi {
             }
             tracing::debug!("Submitting {} sprites", out.len());
             let _ = lua; // silence unused warning
-            (sb_cb)(out);
+            (sb_cb)(&out);
             Ok(())
         }) {
             Ok(f) => f,
@@ -593,8 +599,8 @@ impl EngineApi {
     pub fn setup_engine_namespace_with_sinks_and_metrics(
         &self,
         lua: &Lua,
-        set_transforms_cb: Rc<dyn Fn(Vec<f64>)>,
-        submit_sprites_cb: Rc<dyn Fn(Vec<SpriteV2>)>,
+        set_transforms_cb: Rc<dyn Fn(&[f64])>,
+        submit_sprites_cb: Rc<dyn Fn(&[SpriteV2])>,
         metrics_provider: Rc<dyn Fn() -> (f64, u32, u32)>,
         load_texture_cb: Rc<dyn Fn(String, u32)>,
     ) -> Result<()> {
@@ -683,7 +689,7 @@ mod tests {
             &lua,
             Rc::new(|_| {}),
             Rc::new(move |sprites| {
-                *cap2.borrow_mut() = sprites;
+                *cap2.borrow_mut() = sprites.to_vec();
             }),
         )
         .unwrap();
@@ -719,7 +725,7 @@ mod tests {
         api.setup_engine_namespace_with_sinks(
             &lua,
             Rc::new(move |v| {
-                *cap2.borrow_mut() = Some(v);
+                *cap2.borrow_mut() = Some(v.to_vec());
             }),
             Rc::new(|_| {}),
         )
@@ -747,7 +753,7 @@ mod tests {
         api.setup_engine_namespace_with_sinks(
             &lua,
             Rc::new(move |v| {
-                *cap2.borrow_mut() = Some(v);
+                *cap2.borrow_mut() = Some(v.to_vec());
             }),
             Rc::new(|_| {}),
         )
@@ -779,7 +785,7 @@ mod tests {
             &lua,
             Rc::new(|_| {}),
             Rc::new(move |sprites| {
-                *cap2.borrow_mut() = sprites;
+                *cap2.borrow_mut() = sprites.to_vec();
             }),
         )
         .unwrap();

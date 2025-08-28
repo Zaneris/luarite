@@ -106,6 +106,22 @@ impl EngineState {
         Ok(())
     }
 
+    pub fn set_transforms_from_slice(&mut self, transforms: &[f64]) -> Result<()> {
+        if transforms.len() % 6 != 0 {
+            return Err(anyhow::anyhow!(
+                "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)",
+                transforms.len() % 6
+            ));
+        }
+        let max_entities = 10_000usize;
+        let elems = transforms.len().min(max_entities * 6);
+        self.transform_buffer.clear();
+        self.transform_buffer.extend_from_slice(&transforms[..elems]);
+        self.ffi_calls_this_frame += 1;
+        tracing::debug!("Set {} transforms", elems / 6);
+        Ok(())
+    }
+
     pub fn get_transforms(&self) -> &[f64] {
         &self.transform_buffer
     }
@@ -121,6 +137,19 @@ impl EngineState {
         self.sprites.extend(take);
         self.ffi_calls_this_frame += 1;
 
+        tracing::debug!("Submitted {} sprites", self.sprites.len());
+        Ok(())
+    }
+
+    pub fn append_sprites(&mut self, sprites: &mut Vec<SpriteData>) -> Result<()> {
+        self.sprites.clear();
+        let max = 10_000usize;
+        if sprites.len() > max {
+            tracing::warn!("append_sprites clamped from {} to {}", sprites.len(), max);
+            sprites.truncate(max);
+        }
+        self.sprites.append(sprites);
+        self.ffi_calls_this_frame += 1;
         tracing::debug!("Submitted {} sprites", self.sprites.len());
         Ok(())
     }

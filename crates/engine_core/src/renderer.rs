@@ -164,6 +164,7 @@ pub struct SpriteRenderer {
     // Textures
     textures: Vec<Option<Texture>>,
     white_texture: Texture,
+    current_texture_bind_group: Option<wgpu::BindGroup>,
 
     // Transforms for entity management
     transforms: std::collections::HashMap<u32, Transform>,
@@ -368,6 +369,7 @@ impl SpriteRenderer {
             sprite_indices: Vec::with_capacity(max_sprites as usize * 6),
             textures,
             white_texture,
+            current_texture_bind_group: None,
             transforms: std::collections::HashMap::new(),
         })
     }
@@ -574,24 +576,20 @@ impl SpriteRenderer {
             if !self.sprite_vertices.is_empty() {
                 render_pass.set_pipeline(&self.render_pipeline);
                 render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-
-                // Use white texture as default (TODO: implement proper texture binding per sprite)
-                let white_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: &self.texture_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(&self.white_texture.view),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(&self.white_texture.sampler),
-                        },
-                    ],
-                    label: Some("white_texture_bind_group"),
-                });
-
-                render_pass.set_bind_group(1, &white_bind_group, &[]);
+                // Bind selected texture or fallback to white
+                if let Some(bg) = &self.current_texture_bind_group {
+                    render_pass.set_bind_group(1, bg, &[]);
+                } else {
+                    let white_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        layout: &self.texture_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.white_texture.view) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.white_texture.sampler) },
+                        ],
+                        label: Some("white_texture_bind_group"),
+                    });
+                    render_pass.set_bind_group(1, &white_bind_group, &[]);
+                }
                 render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 render_pass
                     .set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
@@ -643,11 +641,43 @@ impl SpriteRenderer {
                 self.add_sprite_to_batch(sprite_instance, sprite_idx)?;
             }
         }
+        // Attempt to bind a texture based on first sprite
+        if let Some(first) = sprites.first() {
+            if let Some(bytes) = engine_state.get_texture(first.texture_id) {
+                self.ensure_texture_and_bind(first.texture_id, bytes)?;
+            } else {
+                self.current_texture_bind_group = None;
+            }
+        } else {
+            self.current_texture_bind_group = None;
+        }
 
         Ok(())
     }
 
     pub fn get_sprite_count(&self) -> u32 {
         (self.sprite_vertices.len() / 4) as u32
+    }
+
+    fn ensure_texture_and_bind(&mut self, tex_id: u32, bytes: &[u8]) -> Result<()> {
+        let slot = tex_id as usize;
+        if slot >= self.textures.len() {
+            self.textures.resize_with(slot + 1, || None);
+        }
+        if self.textures[slot].is_none() {
+            let tex = Texture::from_bytes(&self.device, &self.queue, bytes, &format!("tex_{}", tex_id))?;
+            self.textures[slot] = Some(tex);
+        }
+        let t = self.textures[slot].as_ref().unwrap();
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&t.sampler) },
+            ],
+            label: Some("sprite_texture_bind_group"),
+        });
+        self.current_texture_bind_group = Some(bind_group);
+        Ok(())
     }
 }

@@ -69,6 +69,15 @@ impl EngineState {
         Ok(id)
     }
 
+    pub fn insert_texture_with_id(&mut self, id: u32, path: &str, bytes: Vec<u8>) {
+        self.textures.insert(id, bytes);
+        self.texture_names.insert(id, path.to_string());
+        if id >= self.next_texture_id {
+            self.next_texture_id = id + 1;
+        }
+        tracing::info!("Inserted texture '{}' with provided ID {}", path, id);
+    }
+
     pub fn get_texture(&self, texture_id: u32) -> Option<&Vec<u8>> {
         self.textures.get(&texture_id)
     }
@@ -104,7 +113,12 @@ impl EngineState {
     // Sprite Management (engine-native format)
     pub fn submit_sprites(&mut self, sprites: Vec<SpriteData>) -> Result<()> {
         self.sprites.clear();
-        self.sprites.extend(sprites);
+        let max = 10_000usize;
+        if sprites.len() > max {
+            tracing::warn!("submit_sprites clamped from {} to {}", sprites.len(), max);
+        }
+        let take = sprites.into_iter().take(max);
+        self.sprites.extend(take);
         self.ffi_calls_this_frame += 1;
 
         tracing::debug!("Submitted {} sprites", self.sprites.len());

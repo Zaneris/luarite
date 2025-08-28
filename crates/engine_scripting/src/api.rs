@@ -574,6 +574,7 @@ impl EngineApi {
         set_transforms_cb: Rc<dyn Fn(Vec<f64>)>,
         submit_sprites_cb: Rc<dyn Fn(Vec<SpriteV2>)>,
         metrics_provider: Rc<dyn Fn() -> (f64, u32, u32)>,
+        load_texture_cb: Rc<dyn Fn(String, u32)>,
     ) -> Result<()> {
         // First install base + sinks
         self.setup_engine_namespace_with_sinks(
@@ -603,6 +604,22 @@ impl EngineApi {
         engine_table
             .set("get_metrics", metrics_func)
             .map_err(|e| anyhow::Error::msg(format!("Failed to set get_metrics: {}", e)))?;
+
+        // Override load_texture to notify host and return a handle immediately
+        let next_texture_id = std::cell::RefCell::new(self.next_texture_id);
+        let lt_cb = load_texture_cb.clone();
+        let load_func = lua
+            .create_function(move |_, path: String| {
+                let mut id_ref = next_texture_id.borrow_mut();
+                let id = *id_ref;
+                *id_ref += 1;
+                lt_cb(path.clone(), id);
+                Ok(TextureHandle(id))
+            })
+            .map_err(|e| anyhow::Error::msg(format!("Failed to override load_texture: {}", e)))?;
+        engine_table
+            .set("load_texture", load_func)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to set load_texture: {}", e)))?;
 
         Ok(())
     }

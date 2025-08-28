@@ -19,10 +19,15 @@ fn main() -> Result<()> {
     let api = EngineApi::new();
 
     // Shared exchange between Lua callbacks and engine update
-    #[derive(Default)]
     struct ScriptExchange {
         transforms: Option<Vec<f64>>, // v2 flat array
         sprites: Vec<SpriteV2>,       // parsed sprites
+        textures: Vec<(u32, String)>, // queued texture loads (id, path)
+    }
+    impl Default for ScriptExchange {
+        fn default() -> Self {
+            Self { transforms: None, sprites: Vec::new(), textures: Vec::new() }
+        }
     }
     let exchange = Arc::new(Mutex::new(ScriptExchange::default()));
 
@@ -50,6 +55,13 @@ fn main() -> Result<()> {
                 ex.sprites.extend(sprites);
             }
         });
+        // Queue texture loads from Lua
+        let ex3 = exchange.clone();
+        let load_texture_cb = Rc::new(move |path: String, id: u32| {
+            if let Ok(mut ex) = ex3.lock() {
+                ex.textures.push((id, path));
+            }
+        });
         // Provider closure reads latest HUD metrics for Lua
         let hud_provider = {
             let hm = hud_metrics.clone();
@@ -66,6 +78,7 @@ fn main() -> Result<()> {
             set_transforms_cb,
             submit_sprites_cb,
             hud_provider,
+            load_texture_cb,
         )?;
     }
 
@@ -98,6 +111,19 @@ fn main() -> Result<()> {
 
             // Drain exchange into engine state
             if let Ok(mut ex) = exchange_for_update.lock() {
+                // Handle queued texture loads
+                if !ex.textures.is_empty() {
+                    for (id, path) in ex.textures.drain(..) {
+                        match std::fs::read(&path) {
+                            Ok(bytes) => {
+                                state.insert_texture_with_id(id, &path, bytes);
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to load texture '{}': {}", path, e);
+                            }
+                        }
+                    }
+                }
                 if let Some(transforms) = ex.transforms.take() {
                     if let Err(e) = state.set_transforms(transforms) {
                         tracing::error!("Failed to set transforms: {}", e);

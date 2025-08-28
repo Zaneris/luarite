@@ -9,6 +9,20 @@ local transforms, sprites = {}, {}
 local entity, texture, time = nil, nil, 0
 local hud_t = 0
 
+-- v2 array helpers (local module-style table)
+local v2 = {}
+function v2.set_transform(arr, idx, id, x, y, rot, sx, sy)
+  local o = (idx-1)*6
+  arr[o+1], arr[o+2], arr[o+3] = id, x, y
+  arr[o+4], arr[o+5], arr[o+6] = rot, sx, sy
+end
+function v2.set_sprite(arr, idx, id, tex, u0, v0, u1, v1, r, g, b, a)
+  local o = (idx-1)*10
+  arr[o+1], arr[o+2] = id, tex
+  arr[o+3], arr[o+4], arr[o+5], arr[o+6] = u0, v0, u1, v1
+  arr[o+7], arr[o+8], arr[o+9], arr[o+10] = r, g, b, a
+end
+
 function on_start()
     -- Try to restore persistent state or create new entity
     entity = engine.restore("player_entity") or engine.create_entity()
@@ -19,14 +33,11 @@ function on_start()
     
     -- Initialize transform array (v2 format: stride=6)
     -- Format: id, x, y, rotation, scale_x, scale_y
-    transforms[1], transforms[2], transforms[3] = entity, 0.0, 0.0  -- id, x, y
-    transforms[4], transforms[5], transforms[6] = 0.0, 1.0, 1.0    -- rot, sx, sy
+    v2.set_transform(transforms, 1, entity, 0.0, 0.0, 0.0, 1.0, 1.0)
     
     -- Initialize sprite array (v2 format: stride=10) 
     -- Format: id, texture, u0, v0, u1, v1, r, g, b, a
-    sprites[1], sprites[2] = entity, texture                       -- id, tex
-    sprites[3], sprites[4], sprites[5], sprites[6] = 0.0, 0.0, 1.0, 1.0  -- u0, v0, u1, v1 (full texture)
-    sprites[7], sprites[8], sprites[9], sprites[10] = 1.0, 1.0, 1.0, 1.0 -- r, g, b, a (white)
+    v2.set_sprite(sprites, 1, entity, texture, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
     
     engine.log("info", "Game script initialized with entity: " .. tostring(entity))
 end

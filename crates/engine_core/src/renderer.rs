@@ -163,8 +163,11 @@ pub struct SpriteRenderer {
 
     // Textures
     textures: Vec<Option<Texture>>,
+    texture_bind_groups: Vec<Option<wgpu::BindGroup>>,
     white_texture: Texture,
-    current_texture_bind_group: Option<wgpu::BindGroup>,
+    
+    // Batches for per-texture draws
+    batches: Vec<DrawBatch>,
 
     // Transforms for entity management
     transforms: std::collections::HashMap<u32, Transform>,
@@ -368,8 +371,9 @@ impl SpriteRenderer {
             sprite_vertices: Vec::with_capacity(max_sprites as usize * 4),
             sprite_indices: Vec::with_capacity(max_sprites as usize * 6),
             textures,
+            texture_bind_groups: Vec::new(),
             white_texture,
-            current_texture_bind_group: None,
+            batches: Vec::with_capacity(64),
             transforms: std::collections::HashMap::new(),
         })
     }
@@ -576,24 +580,24 @@ impl SpriteRenderer {
             if !self.sprite_vertices.is_empty() {
                 render_pass.set_pipeline(&self.render_pipeline);
                 render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                // Bind selected texture or fallback to white
-                if let Some(bg) = &self.current_texture_bind_group {
-                    render_pass.set_bind_group(1, bg, &[]);
-                } else {
-                    let white_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        layout: &self.texture_bind_group_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.white_texture.view) },
-                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.white_texture.sampler) },
-                        ],
-                        label: Some("white_texture_bind_group"),
-                    });
-                    render_pass.set_bind_group(1, &white_bind_group, &[]);
-                }
                 render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                render_pass
-                    .set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                render_pass.draw_indexed(0..self.sprite_indices.len() as u32, 0, 0..1);
+                render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                let white_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.white_texture.view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.white_texture.sampler) },
+                    ],
+                    label: Some("white_texture_bind_group"),
+                });
+                for batch in &self.batches {
+                    if let Some(bg) = self.get_bind_group(batch.texture_id) {
+                        render_pass.set_bind_group(1, bg, &[]);
+                    } else {
+                        render_pass.set_bind_group(1, &white_bind_group, &[]);
+                    }
+                    render_pass.draw_indexed(batch.start_index..(batch.start_index + batch.index_count), 0, 0..1);
+                }
             }
         }
 
@@ -614,42 +618,40 @@ impl SpriteRenderer {
         // Update transforms
         self.set_transforms_v2(engine_state.get_transforms())?;
 
-        // Convert engine sprites to renderer format
+        // Group by texture id, build vertices/indices per group, and track batches
+        self.batches.clear();
+        use std::collections::BTreeMap;
         let sprites = engine_state.get_sprites();
-        for (sprite_idx, sprite_data) in sprites.iter().enumerate() {
-            if let Some(transform) = self.transforms.get(&sprite_data.entity_id) {
-                let sprite_instance = SpriteInstance {
-                    entity_id: sprite_data.entity_id,
-                    texture_id: sprite_data.texture_id,
-                    position: transform.position,
-                    rotation: transform.rotation,
-                    scale: transform.scale * 64.0, // Default sprite size
-                    uv_rect: Vec4::new(
-                        sprite_data.uv[0],
-                        sprite_data.uv[1],
-                        sprite_data.uv[2],
-                        sprite_data.uv[3],
-                    ),
-                    color: Vec4::new(
-                        sprite_data.color[0],
-                        sprite_data.color[1],
-                        sprite_data.color[2],
-                        sprite_data.color[3],
-                    ),
-                };
-
-                self.add_sprite_to_batch(sprite_instance, sprite_idx)?;
+        let mut by_tex: BTreeMap<u32, Vec<&crate::state::SpriteData>> = BTreeMap::new();
+        for sd in sprites.iter() {
+            if self.transforms.contains_key(&sd.entity_id) {
+                by_tex.entry(sd.texture_id).or_default().push(sd);
             }
         }
-        // Attempt to bind a texture based on first sprite
-        if let Some(first) = sprites.first() {
-            if let Some(bytes) = engine_state.get_texture(first.texture_id) {
-                self.ensure_texture_and_bind(first.texture_id, bytes)?;
-            } else {
-                self.current_texture_bind_group = None;
+        let mut sprite_idx = 0usize;
+        for (tex_id, list) in by_tex.into_iter() {
+            let start = self.sprite_indices.len() as u32;
+            // Ensure texture and bind group cache
+            if let Some(bytes) = engine_state.get_texture(tex_id) {
+                self.ensure_texture_cached(tex_id, bytes)?;
             }
-        } else {
-            self.current_texture_bind_group = None;
+            for sd in list.into_iter() {
+                if let Some(transform) = self.transforms.get(&sd.entity_id) {
+                    let sprite_instance = SpriteInstance {
+                        entity_id: sd.entity_id,
+                        texture_id: sd.texture_id,
+                        position: transform.position,
+                        rotation: transform.rotation,
+                        scale: transform.scale * 64.0,
+                        uv_rect: Vec4::new(sd.uv[0], sd.uv[1], sd.uv[2], sd.uv[3]),
+                        color: Vec4::new(sd.color[0], sd.color[1], sd.color[2], sd.color[3]),
+                    };
+                    self.add_sprite_to_batch(sprite_instance, sprite_idx)?;
+                    sprite_idx += 1;
+                }
+            }
+            let end = self.sprite_indices.len() as u32;
+            self.batches.push(DrawBatch { texture_id: tex_id, start_index: start, index_count: end - start });
         }
 
         Ok(())
@@ -659,25 +661,44 @@ impl SpriteRenderer {
         (self.sprite_vertices.len() / 4) as u32
     }
 
-    fn ensure_texture_and_bind(&mut self, tex_id: u32, bytes: &[u8]) -> Result<()> {
+    fn ensure_texture_cached(&mut self, tex_id: u32, bytes: &[u8]) -> Result<()> {
         let slot = tex_id as usize;
         if slot >= self.textures.len() {
             self.textures.resize_with(slot + 1, || None);
+            self.texture_bind_groups.resize_with(slot + 1, || None);
         }
         if self.textures[slot].is_none() {
             let tex = Texture::from_bytes(&self.device, &self.queue, bytes, &format!("tex_{}", tex_id))?;
             self.textures[slot] = Some(tex);
         }
-        let t = self.textures[slot].as_ref().unwrap();
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&t.sampler) },
-            ],
-            label: Some("sprite_texture_bind_group"),
-        });
-        self.current_texture_bind_group = Some(bind_group);
+        if self.texture_bind_groups[slot].is_none() {
+            let t = self.textures[slot].as_ref().unwrap();
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&t.sampler) },
+                ],
+                label: Some("sprite_texture_bind_group"),
+            });
+            self.texture_bind_groups[slot] = Some(bind_group);
+        }
         Ok(())
     }
+
+    fn get_bind_group(&self, tex_id: u32) -> Option<&wgpu::BindGroup> {
+        let slot = tex_id as usize;
+        if slot < self.texture_bind_groups.len() {
+            self.texture_bind_groups[slot].as_ref()
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DrawBatch {
+    texture_id: u32,
+    start_index: u32,
+    index_count: u32,
 }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mlua::{Lua, UserData, UserDataMethods, Value};
+use mlua::{Lua, UserData, UserDataMethods, Value, FromLua};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -452,17 +452,39 @@ impl EngineApi {
             }
         };
 
-        // Override set_transforms
+        // Override set_transforms (accepts a flat array table). First field can be EntityId or number.
         let st_cb = set_transforms_cb.clone();
-        let transform_func = match lua.create_function(move |_, transforms: Vec<f64>| {
-            if transforms.len() % 6 != 0 {
+        let transform_func = match lua.create_function(move |lua, arr: mlua::Table| {
+            let len = arr.raw_len();
+            if len % 6 != 0 {
                 return Err(mlua::Error::RuntimeError(format!(
                     "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)",
-                    transforms.len() % 6
+                    len % 6
                 )));
             }
-            tracing::debug!("Setting {} transforms", transforms.len() / 6);
-            (st_cb)(transforms);
+            let mut out: Vec<f64> = Vec::with_capacity(len);
+            let mut i = 1;
+            while i <= len {
+                // id can be EntityId userdata or a number
+                let v: mlua::Value = arr.raw_get(i)?; i += 1;
+                let id_num = match v {
+                    mlua::Value::UserData(ud) => {
+                        if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f64 } else {
+                            return Err(mlua::Error::RuntimeError("ARG_ERROR: id must be EntityId or number".into()));
+                        }
+                    }
+                    _ => f64::from_lua(v, lua)?,
+                };
+                out.push(id_num);
+                // x,y,rot,sx,sy numbers
+                let x: f64 = arr.raw_get(i)?; i += 1; out.push(x);
+                let y: f64 = arr.raw_get(i)?; i += 1; out.push(y);
+                let rot: f64 = arr.raw_get(i)?; i += 1; out.push(rot);
+                let sx: f64 = arr.raw_get(i)?; i += 1; out.push(sx);
+                let sy: f64 = arr.raw_get(i)?; i += 1; out.push(sy);
+            }
+            tracing::debug!("Setting {} transforms", out.len() / 6);
+            (st_cb)(out);
             Ok(())
         }) {
             Ok(f) => f,
@@ -638,9 +660,11 @@ mod tests {
         let engine_tbl: mlua::Table = globals.get("engine").unwrap();
         let func: mlua::Function = engine_tbl.get("set_transforms").unwrap();
         // 5 elements (not divisible by 6)
-        let err = func
-            .call::<()>(vec![1.0f64, 0.0, 0.0, 0.0, 1.0])
-            .unwrap_err();
+        let t = lua.create_table().unwrap();
+        for (i, v) in [1.0f64, 0.0, 0.0, 0.0, 1.0].iter().enumerate() {
+            t.raw_set(i + 1, *v).unwrap();
+        }
+        let err = func.call::<()>(t).unwrap_err();
         let s = format!("{}", err);
         assert!(
             s.contains("ARG_ERROR: set_transforms stride mismatch"),
@@ -703,11 +727,46 @@ mod tests {
         let globals = lua.globals();
         let engine_tbl: mlua::Table = globals.get("engine").unwrap();
         let func: mlua::Function = engine_tbl.get("set_transforms").unwrap();
-        let v = vec![1.0f64, 10.0, 20.0, 0.0, 1.0, 1.0];
-        func.call::<()>(v.clone()).unwrap();
+        let t = lua.create_table().unwrap();
+        // id as number
+        for (i, v) in [1.0f64, 10.0, 20.0, 0.0, 1.0, 1.0].iter().enumerate() {
+            t.raw_set(i + 1, *v).unwrap();
+        }
+        func.call::<()>(t).unwrap();
         let got = captured.borrow().clone().unwrap();
         assert_eq!(got.len(), 6);
         assert_eq!(got[1], 10.0);
+    }
+
+    #[test]
+    fn set_transforms_accepts_entity_id() {
+        let lua = Lua::new();
+        let api = EngineApi::new();
+        let captured: Rc<RefCell<Option<Vec<f64>>>> = Rc::new(RefCell::new(None));
+        let cap2 = captured.clone();
+        api.setup_engine_namespace_with_sinks(
+            &lua,
+            Rc::new(move |v| {
+                *cap2.borrow_mut() = Some(v);
+            }),
+            Rc::new(|_| {}),
+        )
+        .unwrap();
+        let globals = lua.globals();
+        let engine_tbl: mlua::Table = globals.get("engine").unwrap();
+        let func: mlua::Function = engine_tbl.get("set_transforms").unwrap();
+        // Build table with EntityId as first field
+        let t = lua.create_table().unwrap();
+        let ent_ud = lua.create_userdata(EntityId(42)).unwrap();
+        t.raw_set(1, ent_ud).unwrap();
+        t.raw_set(2, 100.0f64).unwrap();
+        t.raw_set(3, 200.0f64).unwrap();
+        t.raw_set(4, 0.0f64).unwrap();
+        t.raw_set(5, 1.0f64).unwrap();
+        t.raw_set(6, 1.0f64).unwrap();
+        func.call::<()>(t).unwrap();
+        let got = captured.borrow().clone().unwrap();
+        assert_eq!(got[0], 42.0);
     }
 
     #[test]

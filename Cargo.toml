@@ -12,6 +12,8 @@ winit = "0.30"
 wgpu = "23.0"
 glam = "0.29"
 image = "0.25"
+bytemuck = { version = "1.18", features = ["derive"] }
+pollster = "0.4"
 anyhow = "1.0"
 tracing = "0.1"
 tracing-subscriber = "0.3"

@@ -8,6 +8,8 @@ winit.workspace = true
 wgpu.workspace = true
 glam.workspace = true
 image.workspace = true
+bytemuck.workspace = true
+pollster.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 

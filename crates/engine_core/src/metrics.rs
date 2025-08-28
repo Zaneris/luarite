@@ -1,6 +1,6 @@
-use std::time::{Duration, Instant};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct FrameMetrics {
@@ -38,12 +38,12 @@ impl Default for FrameMetrics {
 pub struct MetricsCollector {
     current_frame: FrameMetrics,
     frame_start: Option<Instant>,
-    
+
     // Counters for this frame
     ffi_calls_this_frame: AtomicU32,
     draw_calls_this_frame: AtomicU32,
     sprites_this_frame: AtomicU32,
-    
+
     // Historical data for performance analysis
     frame_history: Vec<FrameMetrics>,
     max_history: usize,
@@ -92,7 +92,8 @@ impl MetricsCollector {
 
     pub fn record_draw_call(&self, sprite_count: u32) {
         self.draw_calls_this_frame.fetch_add(1, Ordering::Relaxed);
-        self.sprites_this_frame.fetch_add(sprite_count, Ordering::Relaxed);
+        self.sprites_this_frame
+            .fetch_add(sprite_count, Ordering::Relaxed);
     }
 
     pub fn record_lua_gc(&mut self, duration: Duration, memory_mb: f64) {
@@ -119,17 +120,23 @@ impl MetricsCollector {
 
         let mut stats = HashMap::new();
         let frames: Vec<&FrameMetrics> = self.frame_history.iter().collect();
-        
+
         // Calculate CPU frame time stats
         let cpu_times: Vec<f64> = frames.iter().map(|f| f.cpu_frame_ms).collect();
         stats.insert("cpu_frame_mean_ms".to_string(), mean(&cpu_times));
         stats.insert("cpu_frame_p99_ms".to_string(), percentile(&cpu_times, 0.99));
-        stats.insert("cpu_frame_max_ms".to_string(), cpu_times.iter().copied().fold(0.0, f64::max));
+        stats.insert(
+            "cpu_frame_max_ms".to_string(),
+            cpu_times.iter().copied().fold(0.0, f64::max),
+        );
 
         // FFI calls per frame (should be <= 3 per plan)
         let ffi_calls: Vec<f64> = frames.iter().map(|f| f.ffi_calls as f64).collect();
         stats.insert("ffi_calls_mean".to_string(), mean(&ffi_calls));
-        stats.insert("ffi_calls_max".to_string(), ffi_calls.iter().copied().fold(0.0, f64::max));
+        stats.insert(
+            "ffi_calls_max".to_string(),
+            ffi_calls.iter().copied().fold(0.0, f64::max),
+        );
 
         stats
     }
@@ -153,7 +160,10 @@ impl MetricsCollector {
 
         if let Some(&max_ffi) = stats.get("ffi_calls_max") {
             if max_ffi > 3.0 {
-                violations.push(format!("ffi_calls_per_frame ({}) exceeds budget of 3", max_ffi as u32));
+                violations.push(format!(
+                    "ffi_calls_per_frame ({}) exceeds budget of 3",
+                    max_ffi as u32
+                ));
             }
         }
 
@@ -161,12 +171,24 @@ impl MetricsCollector {
     }
 }
 
+impl Default for MetricsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn mean(values: &[f64]) -> f64 {
-    if values.is_empty() { 0.0 } else { values.iter().sum::<f64>() / values.len() as f64 }
+    if values.is_empty() {
+        0.0
+    } else {
+        values.iter().sum::<f64>() / values.len() as f64
+    }
 }
 
 fn percentile(values: &[f64], p: f64) -> f64 {
-    if values.is_empty() { return 0.0; }
+    if values.is_empty() {
+        return 0.0;
+    }
     let mut sorted = values.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let index = ((sorted.len() - 1) as f64 * p).round() as usize;

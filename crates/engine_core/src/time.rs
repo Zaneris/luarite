@@ -20,8 +20,8 @@ impl FixedTimeStep {
         }
     }
 
-    pub fn update<F>(&mut self, mut fixed_update: F) 
-    where 
+    pub fn update<F>(&mut self, mut fixed_update: F)
+    where
         F: FnMut(f64),
     {
         let new_time = Instant::now();
@@ -50,5 +50,11 @@ impl FixedTimeStep {
 
     pub fn alpha(&self) -> f64 {
         self.accumulator / self.fixed_dt
+    }
+}
+
+impl Default for FixedTimeStep {
+    fn default() -> Self {
+        Self::new()
     }
 }

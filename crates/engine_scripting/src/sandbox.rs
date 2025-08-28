@@ -1,5 +1,5 @@
-use mlua::{Lua, Table, Function, Value};
 use anyhow::Result;
+use mlua::{Function, Lua, Table, Value};
 
 pub struct LuaSandbox {
     lua: Lua,
@@ -18,7 +18,7 @@ impl LuaSandbox {
 
         // Remove dangerous globals first
         self.remove_dangerous_globals(&globals)?;
-        
+
         // Lock package system
         self.lock_package_system(&globals)?;
 
@@ -28,13 +28,26 @@ impl LuaSandbox {
     fn remove_dangerous_globals(&self, globals: &Table) -> Result<()> {
         // Remove dangerous functions and libraries
         let dangerous_globals = vec![
-            "io", "print", "os", "require", "dofile", "loadfile", "load",
-            "debug", "package", "collectgarbage", "getfenv", "setfenv"
+            "io",
+            "print",
+            "os",
+            "require",
+            "dofile",
+            "loadfile",
+            "load",
+            "debug",
+            "package",
+            "collectgarbage",
+            "getfenv",
+            "setfenv",
         ];
 
         for global_name in dangerous_globals {
             if let Err(e) = globals.set(global_name, Value::Nil) {
-                return Err(anyhow::Error::msg(format!("Failed to remove {}: {}", global_name, e)));
+                return Err(anyhow::Error::msg(format!(
+                    "Failed to remove {}: {}",
+                    global_name, e
+                )));
             }
         }
 
@@ -45,44 +58,71 @@ impl LuaSandbox {
         // Create empty package table to prevent access
         let package_table = match self.lua.create_table() {
             Ok(table) => table,
-            Err(e) => return Err(anyhow::Error::msg(format!("Failed to create package table: {}", e))),
+            Err(e) => {
+                return Err(anyhow::Error::msg(format!(
+                    "Failed to create package table: {}",
+                    e
+                )))
+            }
         };
-        
+
         if let Err(e) = package_table.set("path", "") {
-            return Err(anyhow::Error::msg(format!("Failed to set package.path: {}", e)));
+            return Err(anyhow::Error::msg(format!(
+                "Failed to set package.path: {}",
+                e
+            )));
         }
-        
+
         if let Err(e) = package_table.set("cpath", "") {
-            return Err(anyhow::Error::msg(format!("Failed to set package.cpath: {}", e)));
+            return Err(anyhow::Error::msg(format!(
+                "Failed to set package.cpath: {}",
+                e
+            )));
         }
-        
+
         if let Err(e) = globals.set("package", package_table) {
-            return Err(anyhow::Error::msg(format!("Failed to set package table: {}", e)));
+            return Err(anyhow::Error::msg(format!(
+                "Failed to set package table: {}",
+                e
+            )));
         }
 
         // Replace require with our controlled version
-        let controlled_require = match self.lua.create_function(|_lua, module_name: String| -> mlua::Result<()> {
-            Err(mlua::Error::RuntimeError(format!(
-                "Module loading disabled in sandbox: {}", module_name
-            )))
-        }) {
-            Ok(func) => func,
-            Err(e) => return Err(anyhow::Error::msg(format!("Failed to create require function: {}", e))),
-        };
-        
+        let controlled_require =
+            match self
+                .lua
+                .create_function(|_lua, module_name: String| -> mlua::Result<()> {
+                    Err(mlua::Error::RuntimeError(format!(
+                        "Module loading disabled in sandbox: {}",
+                        module_name
+                    )))
+                }) {
+                Ok(func) => func,
+                Err(e) => {
+                    return Err(anyhow::Error::msg(format!(
+                        "Failed to create require function: {}",
+                        e
+                    )))
+                }
+            };
+
         if let Err(e) = globals.set("require", controlled_require) {
-            return Err(anyhow::Error::msg(format!("Failed to set require function: {}", e)));
+            return Err(anyhow::Error::msg(format!(
+                "Failed to set require function: {}",
+                e
+            )));
         }
 
         Ok(())
     }
 
     pub fn load_script(&self, script_content: &str, script_name: &str) -> Result<()> {
-        match self.lua.load(script_content)
-            .set_name(script_name)
-            .exec() {
+        match self.lua.load(script_content).set_name(script_name).exec() {
             Ok(()) => Ok(()),
-            Err(e) => Err(anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e))),
+            Err(e) => Err(anyhow::Error::msg(format!(
+                "Failed to load script {}: {}",
+                script_name, e
+            ))),
         }
     }
 
@@ -94,12 +134,20 @@ impl LuaSandbox {
         let globals = self.lua.globals();
         let func: Function = match globals.get(func_name) {
             Ok(f) => f,
-            Err(e) => return Err(anyhow::Error::msg(format!("Function '{}' not found: {}", func_name, e))),
+            Err(e) => {
+                return Err(anyhow::Error::msg(format!(
+                    "Function '{}' not found: {}",
+                    func_name, e
+                )))
+            }
         };
-        
+
         match func.call(args) {
             Ok(result) => Ok(result),
-            Err(e) => Err(anyhow::Error::msg(format!("Error calling function '{}': {}", func_name, e))),
+            Err(e) => Err(anyhow::Error::msg(format!(
+                "Error calling function '{}': {}",
+                func_name, e
+            ))),
         }
     }
 
@@ -110,7 +158,10 @@ impl LuaSandbox {
         let globals = self.lua.globals();
         match globals.set(name, value) {
             Ok(()) => Ok(()),
-            Err(e) => Err(anyhow::Error::msg(format!("Failed to set global '{}': {}", name, e))),
+            Err(e) => Err(anyhow::Error::msg(format!(
+                "Failed to set global '{}': {}",
+                name, e
+            ))),
         }
     }
 
@@ -121,7 +172,10 @@ impl LuaSandbox {
         let globals = self.lua.globals();
         match globals.get(name) {
             Ok(value) => Ok(value),
-            Err(e) => Err(anyhow::Error::msg(format!("Failed to get global '{}': {}", name, e))),
+            Err(e) => Err(anyhow::Error::msg(format!(
+                "Failed to get global '{}': {}",
+                name, e
+            ))),
         }
     }
 

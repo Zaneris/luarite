@@ -566,6 +566,46 @@ impl EngineApi {
 
         Ok(())
     }
+
+    /// Extended variant to also override get_metrics via a provider closure.
+    pub fn setup_engine_namespace_with_sinks_and_metrics(
+        &self,
+        lua: &Lua,
+        set_transforms_cb: Rc<dyn Fn(Vec<f64>)>,
+        submit_sprites_cb: Rc<dyn Fn(Vec<SpriteV2>)>,
+        metrics_provider: Rc<dyn Fn() -> (f64, u32, u32)>,
+    ) -> Result<()> {
+        // First install base + sinks
+        self.setup_engine_namespace_with_sinks(
+            lua,
+            set_transforms_cb,
+            submit_sprites_cb,
+        )?;
+
+        // Override get_metrics
+        let globals = lua.globals();
+        let engine_table: mlua::Table = globals
+            .get("engine")
+            .map_err(|e| anyhow::Error::msg(format!("Failed to get engine table: {}", e)))?;
+
+        let provider = metrics_provider.clone();
+        let metrics_func = lua
+            .create_function(move |lua, ()| {
+                let (cpu_ms, sprites, ffi) = provider();
+                let tbl = lua.create_table()?;
+                tbl.set("cpu_frame_ms", cpu_ms)?;
+                tbl.set("sprites_submitted", sprites)?;
+                tbl.set("ffi_calls", ffi)?;
+                Ok(tbl)
+            })
+            .map_err(|e| anyhow::Error::msg(format!("Failed to override get_metrics: {}", e)))?;
+
+        engine_table
+            .set("get_metrics", metrics_func)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to set get_metrics: {}", e)))?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

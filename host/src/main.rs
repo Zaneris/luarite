@@ -26,6 +26,15 @@ fn main() -> Result<()> {
     }
     let exchange = Arc::new(Mutex::new(ScriptExchange::default()));
 
+    // HUD metrics shared with Lua get_metrics()
+    #[derive(Clone, Copy, Default)]
+    struct HudMetrics {
+        cpu_frame_ms: f64,
+        sprites_submitted: u32,
+        ffi_calls: u32,
+    }
+    let hud_metrics = Arc::new(Mutex::new(HudMetrics::default()));
+
     // Install engine namespace with sinks that fill the exchange
     {
         let ex1 = exchange.clone();
@@ -41,7 +50,23 @@ fn main() -> Result<()> {
                 ex.sprites.extend(sprites);
             }
         });
-        api.setup_engine_namespace_with_sinks(sandbox.lua(), set_transforms_cb, submit_sprites_cb)?;
+        // Provider closure reads latest HUD metrics for Lua
+        let hud_provider = {
+            let hm = hud_metrics.clone();
+            Rc::new(move || {
+                if let Ok(m) = hm.lock() {
+                    (m.cpu_frame_ms, m.sprites_submitted, m.ffi_calls)
+                } else {
+                    (0.0, 0, 0)
+                }
+            })
+        };
+        api.setup_engine_namespace_with_sinks_and_metrics(
+            sandbox.lua(),
+            set_transforms_cb,
+            submit_sprites_cb,
+            hud_provider,
+        )?;
     }
 
     // Load the main game script
@@ -92,6 +117,18 @@ fn main() -> Result<()> {
                         tracing::error!("Failed to submit sprites: {}", e);
                     }
                 }
+            }
+        });
+    }
+
+    // Feed HUD metrics from the engine after each frame
+    {
+        let hm = hud_metrics.clone();
+        window.set_on_end_frame(move |state, metrics| {
+            if let Ok(mut m) = hm.lock() {
+                m.cpu_frame_ms = metrics.current_metrics().cpu_frame_ms;
+                m.ffi_calls = state.get_ffi_calls_this_frame();
+                m.sprites_submitted = state.get_sprites().len() as u32;
             }
         });
     }

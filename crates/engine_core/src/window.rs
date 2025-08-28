@@ -14,6 +14,7 @@ use winit::{
 
 type OnStartCb = Box<dyn FnMut(&mut EngineState)>;
 type OnUpdateCb = Box<dyn FnMut(f64, &mut EngineState)>;
+type OnEndFrameCb = Box<dyn FnMut(&EngineState, &MetricsCollector)>;
 
 pub struct EngineWindow {
     window: Option<Arc<Window>>,
@@ -26,6 +27,7 @@ pub struct EngineWindow {
     script_on_start_called: bool,
     script_on_start: Option<OnStartCb>,
     script_on_update: Option<OnUpdateCb>,
+    on_end_frame: Option<OnEndFrameCb>,
 }
 
 impl EngineWindow {
@@ -40,6 +42,7 @@ impl EngineWindow {
             script_on_start_called: false,
             script_on_start: None,
             script_on_update: None,
+            on_end_frame: None,
         }
     }
 
@@ -71,6 +74,13 @@ impl EngineWindow {
         F: FnMut(f64, &mut EngineState) + 'static,
     {
         self.script_on_update = Some(Box::new(f));
+    }
+
+    pub fn set_on_end_frame<F>(&mut self, f: F)
+    where
+        F: FnMut(&EngineState, &MetricsCollector) + 'static,
+    {
+        self.on_end_frame = Some(Box::new(f));
     }
 }
 
@@ -209,6 +219,11 @@ impl ApplicationHandler for EngineWindow {
 
         // End frame metrics collection
         self.metrics.end_frame();
+
+        // Host callback with latest metrics snapshot
+        if let Some(cb) = &mut self.on_end_frame {
+            cb(&self.engine_state, &self.metrics);
+        }
 
         // Log metrics every 5 seconds (300 frames at 60 FPS)
         if self.frame_count % 300 == 0 {

@@ -7,6 +7,7 @@ assert(engine.api_version == 1, "Script requires API version 1, got " .. tostrin
 -- Reusable arrays to avoid GC pressure (per performance guidelines)
 local transforms, sprites = {}, {}
 local entity, texture, time = nil, nil, 0
+local hud_t = 0
 
 function on_start()
     -- Try to restore persistent state or create new entity
@@ -33,6 +34,7 @@ end
 function on_update(dt)
     -- Update time and animate position
     time = time + dt
+    hud_t = hud_t + dt
     
     -- Simple sine wave animation
     transforms[2] = math.sin(time) * 100.0  -- x position
@@ -42,6 +44,16 @@ function on_update(dt)
     -- Submit batched updates to engine
     engine.set_transforms(transforms)
     engine.submit_sprites(sprites)
+
+    -- Minimal HUD logger: once per second
+    if hud_t >= 1.0 then
+        hud_t = 0
+        local m = engine.get_metrics()
+        engine.log("info", string.format(
+            "HUD cpu=%.2fms sprites=%d ffi=%d",
+            m.cpu_frame_ms, m.sprites_submitted, m.ffi_calls
+        ))
+    end
 end
 
 function on_reload(old_env)

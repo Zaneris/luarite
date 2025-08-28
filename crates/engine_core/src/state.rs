@@ -81,13 +81,16 @@ impl EngineState {
     pub fn set_transforms(&mut self, transforms: Vec<f64>) -> Result<()> {
         if transforms.len() % 6 != 0 {
             return Err(anyhow::anyhow!(
-                "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)",
+                "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)", 
                 transforms.len() % 6
             ));
         }
 
+        // Clamp to max entities budget to avoid abuse
+        let max_entities = 10_000usize;
+        let elems = transforms.len().min(max_entities * 6);
         self.transform_buffer.clear();
-        self.transform_buffer.extend_from_slice(&transforms);
+        self.transform_buffer.extend_from_slice(&transforms[..elems]);
         self.ffi_calls_this_frame += 1;
 
         tracing::debug!("Set {} transforms", transforms.len() / 6);

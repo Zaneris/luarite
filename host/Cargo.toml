@@ -1,0 +1,11 @@
+[package]
+name = "luarite"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+engine_core = { path = "../crates/engine_core" }
+engine_scripting = { path = "../crates/engine_scripting" }
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

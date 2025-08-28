@@ -1,0 +1,14 @@
+[package]
+name = "engine_scripting"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mlua.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+glam.workspace = true
+engine_core = { path = "../engine_core" }
+
+[dev-dependencies]
+proptest.workspace = true

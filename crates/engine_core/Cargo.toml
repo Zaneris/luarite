@@ -1,0 +1,15 @@
+[package]
+name = "engine_core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winit.workspace = true
+wgpu.workspace = true
+glam.workspace = true
+image.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

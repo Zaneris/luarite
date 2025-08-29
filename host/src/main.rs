@@ -300,11 +300,11 @@ fn main() -> Result<()> {
                 // Prefer zero-copy typed sprites swap if present
                 if let Some((rcvec, rows, _cap)) = ex.typed_sprites.take() {
                     if !ex.drained_sprites_this_frame {
-                        // Copy path: preserve Lua buffer contents (no flicker)
+                        // Copy path: write directly into EngineState without intermediate Vec moves
                         let v = rcvec.borrow();
-                        sprites_scratch.clear();
-                        sprites_scratch.extend_from_slice(&v[..rows]);
-                        let _ = state.append_sprites(&mut sprites_scratch);
+                        if let Err(e) = state.set_sprites_from_slice(&v[..rows.min(v.len())]) {
+                            tracing::error!("Failed to set sprites from slice: {}", e);
+                        }
                         ex.drained_sprites_this_frame = true;
                     }
                 } else if !ex.sprites.is_empty() {

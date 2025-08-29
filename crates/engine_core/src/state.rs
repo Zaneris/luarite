@@ -181,6 +181,16 @@ impl EngineState {
         Ok(())
     }
 
+    pub fn set_sprites_from_slice(&mut self, sprites: &[SpriteData]) -> Result<()> {
+        let max = 10_000usize;
+        let take = sprites.len().min(max);
+        self.sprites_front.clear();
+        self.sprites_front.extend_from_slice(&sprites[..take]);
+        self.ffi_calls_this_frame += 1;
+        tracing::debug!("Submitted {} sprites (slice)", take);
+        Ok(())
+    }
+
     // Zero-copy: swap Lua-owned vec into back buffer, taking only `len` rows
     pub fn swap_typed_sprites_into_back(&mut self, script_vec: &mut Vec<SpriteData>, len: usize) {
         use std::cmp::min;

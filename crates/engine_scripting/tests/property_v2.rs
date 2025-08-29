@@ -46,6 +46,46 @@ proptest! {
     }
 }
 
+// Submit_sprites property tests
+fn build_sprite_table(lua: &Lua, vals: &[f64]) -> mlua::Table {
+    let t = lua.create_table().unwrap();
+    for (i, v) in vals.iter().enumerate() { t.raw_set(i+1, *v).unwrap(); }
+    t
+}
+
+proptest! {
+    #[test]
+    fn base_api_sprites_valid_stride_passes(mut vals in proptest::collection::vec((-1e3f64..1e3f64), 0..200)) {
+        let lua = Lua::new();
+        let api = EngineApi::new();
+        api.setup_engine_namespace(&lua).unwrap();
+        let engine_tbl: mlua::Table = lua.globals().get("engine").unwrap();
+        let func: mlua::Function = engine_tbl.get("submit_sprites").unwrap();
+
+        // length multiple of 10 (including 0)
+        let rem = vals.len() % 10;
+        if rem != 0 { vals.truncate(vals.len() - rem); }
+        // For first two fields each stride, use numbers (id, tex) OK
+        let t = build_sprite_table(&lua, &vals);
+        let _ = func.call::<()>(t).unwrap();
+    }
+
+    #[test]
+    fn base_api_sprites_invalid_stride_fails(mut vals in proptest::collection::vec((-1e3f64..1e3f64), 1..200)) {
+        let lua = Lua::new();
+        let api = EngineApi::new();
+        api.setup_engine_namespace(&lua).unwrap();
+        let engine_tbl: mlua::Table = lua.globals().get("engine").unwrap();
+        let func: mlua::Function = engine_tbl.get("submit_sprites").unwrap();
+
+        if vals.len() % 10 == 0 { vals.push(0.0); }
+        let t = build_sprite_table(&lua, &vals);
+        let err = func.call::<()>(t).unwrap_err();
+        let s = format!("{}", err);
+        prop_assert!(s.contains("submit_sprites stride mismatch"));
+    }
+}
+
 proptest! {
     #[test]
     fn sinks_valid_stride_passes_and_hits_sink(mut vals in proptest::collection::vec((-1e3f64..1e3f64), 0..120)) {

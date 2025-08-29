@@ -168,10 +168,29 @@ fn main() -> Result<()> {
         let exchange_for_update = exchange.clone();
         let sandbox_for_reload = sandbox.clone();
         let mut quiesce_frames: u8 = 0;
+        let mut reload_key_down = false;
         let mut sprites_scratch: Vec<SpriteData> = Vec::with_capacity(1024);
+        // Capture only what we need (avoid capturing `window` by value)
+        let window_input_for_reload = window.input_handle();
         window.set_script_on_update(move |dt, state| {
             // Advance engine time for Lua view
             api_for_update.update_time(dt);
+
+            // Manual reload on 'R'
+            if let Ok(inp) = window_input_for_reload.lock() {
+                let is_down = inp.keys.contains("KeyR");
+                if is_down && !reload_key_down {
+                    if let Ok(src) = std::fs::read_to_string(SCRIPT_PATH) {
+                        if let Err(e) = sandbox_for_reload.reload_script(&src, "game.lua") {
+                            tracing::error!("Manual reload failed: {}", e);
+                        } else {
+                            tracing::info!("Manual script reload triggered");
+                            quiesce_frames = 1;
+                        }
+                    }
+                }
+                reload_key_down = is_down;
+            }
 
             // File watcher: reload if modified
             if let Ok(meta) = std::fs::metadata(SCRIPT_PATH) {

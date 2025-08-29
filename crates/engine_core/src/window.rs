@@ -260,6 +260,8 @@ impl ApplicationHandler for EngineWindow {
             if let Err(e) = renderer.update_from_engine_state(&self.engine_state) {
                 tracing::error!("Failed to update renderer from engine state: {}", e);
             }
+            // Record draw calls and sprites planned for this frame
+            self.metrics.record_draws(renderer.get_draw_call_count(), renderer.get_sprite_count());
         }
 
         // Reset engine frame counters

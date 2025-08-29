@@ -18,7 +18,8 @@ pub struct EngineState {
     transform_buffer: Vec<f32>, // stride=6: [id, x, y, rot, sx, sy, ...]
 
     // Sprite data (engine-native representation)
-    sprites: Vec<SpriteData>,
+    sprites_front: Vec<SpriteData>,
+    sprites_back: Vec<SpriteData>,
 
     // Texture storage
     textures: HashMap<u32, Vec<u8>>,     // texture_id -> raw bytes
@@ -43,7 +44,8 @@ impl EngineState {
     pub fn new() -> Self {
         Self {
             transform_buffer: Vec::with_capacity(10000 * 6), // Pre-allocate for max entities
-            sprites: Vec::with_capacity(10000),              // Pre-allocate for max entities
+            sprites_front: Vec::with_capacity(10000),        // Pre-allocate for max entities
+            sprites_back: Vec::with_capacity(10000),
             textures: HashMap::new(),
             texture_names: HashMap::new(),
             next_entity_id: 1,
@@ -153,43 +155,60 @@ impl EngineState {
 
     // Sprite Management (engine-native format)
     pub fn submit_sprites(&mut self, sprites: Vec<SpriteData>) -> Result<()> {
-        self.sprites.clear();
+        self.sprites_front.clear();
         let max = 10_000usize;
         if sprites.len() > max {
             tracing::warn!("submit_sprites clamped from {} to {}", sprites.len(), max);
         }
         let take = sprites.into_iter().take(max);
-        self.sprites.extend(take);
+        self.sprites_front.extend(take);
         self.ffi_calls_this_frame += 1;
 
-        tracing::debug!("Submitted {} sprites", self.sprites.len());
+        tracing::debug!("Submitted {} sprites", self.sprites_front.len());
         Ok(())
     }
 
     pub fn append_sprites(&mut self, sprites: &mut Vec<SpriteData>) -> Result<()> {
-        self.sprites.clear();
+        self.sprites_front.clear();
         let max = 10_000usize;
         if sprites.len() > max {
             tracing::warn!("append_sprites clamped from {} to {}", sprites.len(), max);
             sprites.truncate(max);
         }
-        self.sprites.append(sprites);
+        self.sprites_front.append(sprites);
         self.ffi_calls_this_frame += 1;
-        tracing::debug!("Submitted {} sprites", self.sprites.len());
+        tracing::debug!("Submitted {} sprites", self.sprites_front.len());
         Ok(())
     }
 
-    pub fn swap_sprites_with_len(&mut self, script_vec: &mut Vec<SpriteData>, len: usize) {
+    // Zero-copy: swap Lua-owned vec into back buffer, taking only `len` rows
+    pub fn swap_typed_sprites_into_back(&mut self, script_vec: &mut Vec<SpriteData>, len: usize) {
         use std::cmp::min;
-        std::mem::swap(&mut self.sprites, script_vec);
-        let take = min(self.sprites.len(), len);
-        self.sprites.truncate(take);
+        std::mem::swap(&mut self.sprites_back, script_vec);
+        let take = min(self.sprites_back.len(), len);
+        self.sprites_back.truncate(take);
         self.ffi_calls_this_frame += 1;
-        tracing::debug!("Swapped sprites buffer ({} sprites)", take);
+        tracing::debug!("Swapped sprites into back buffer ({} sprites)", take);
+    }
+
+    // Promote back buffer (freshly swapped) into front buffer visible to the renderer (zero-copy move)
+    pub fn promote_sprites_back_to_front(&mut self) {
+        if !self.sprites_back.is_empty() {
+            std::mem::swap(&mut self.sprites_front, &mut self.sprites_back);
+        }
+    }
+
+    // Restore Lua-side vec by swapping whatever remains in back buffer back into the script vec,
+    // then resize script vec to its capacity.
+    pub fn restore_lua_sprite_vec(&mut self, script_vec: &mut Vec<SpriteData>, cap: usize) {
+        std::mem::swap(&mut self.sprites_back, script_vec);
+        if script_vec.len() < cap {
+            script_vec.resize(cap, SpriteData { entity_id: 0, texture_id: 0, uv: [0.0;4], color: [0.0;4] });
+        }
     }
 
     pub fn get_sprites(&self) -> &[SpriteData] {
-        &self.sprites
+        &self.sprites_front
     }
 
     // Time Management

@@ -91,6 +91,7 @@ impl EngineWindow {
         self.on_end_frame = Some(Box::new(f));
     }
 
+
     pub fn input_handle(&self) -> std::sync::Arc<std::sync::Mutex<InputState>> {
         self.input.clone()
     }
@@ -265,6 +266,7 @@ impl ApplicationHandler for EngineWindow {
 
         // Update renderer with current engine state
         if let Some(renderer) = &mut self.renderer {
+            // If a zero-copy path is used, host will promote before renderer update.
             if let Err(e) = renderer.update_from_engine_state(&self.engine_state) {
                 tracing::error!("Failed to update renderer from engine state: {}", e);
             }

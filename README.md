@@ -4,22 +4,24 @@ Luarite is a small, batched 2D engine written in Rust with a sandboxed Lua 5.4 s
 
 ## Highlights
 - Rust core: `winit` (window/input), `wgpu` (render), `glam` (math), `tracing` (logs)
-- Lua 5.4 scripting via `mlua` (vendored), whitelisted safe_base
-- Batched API: typed buffers (zero-GC) + legacy v2 arrays
-- Y‑up world coordinates (pixels), texture batching, scratch‑buffer reuse
-- Tests: unit + integration + property (proptest) for marshalling and sandboxing
+- Lua 5.4 scripting via `mlua` (vendored), strict sandbox (no `require`)
+- Batched API: typed buffers (preferred) with builder; v2 flat arrays still supported
+- Y‑up world coordinates (pixels); f32 transforms; texture‑ID batching
+- On‑screen HUD overlay (FPS, p99, sprites, FFI) with `engine.hud_printf`
+- Offscreen renderer for GPU‑free e2e tests
 
 ## Quick Start
 - Run: `cargo run -p luarite`
+  - Live reloads `scripts/game.lua` on save. Controls for Pong: `W/S`, `ArrowUp/ArrowDown`.
 - Build: `cargo build`
+- Record/Replay (determinism): `cargo run -p luarite -- --record out.log` then `--replay out.log`
 - Lint/format: `cargo fmt --all && cargo clippy --all-targets -- -D warnings`
 
-Demo: A simple Pong‑like script is provided in `scripts/game.lua` (controls: `W/S`, `ArrowUp/ArrowDown`). The rest of this README focuses on writing your own scripts.
+The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by default (WARN+).
 
 ## Writing Game Scripts
-- Location: put your entry script at `scripts/game.lua` (default). The host embeds this file at build time.
-  - To use a different file, change the path in `host/src/main.rs` (`include_str!("../../scripts/game.lua")`).
-  - `require`/`dofile` are disabled in the sandbox; keep your logic in the entry script (or build your own loader in Rust).
+- Location: `scripts/game.lua` (default). The host loads from disk and hot‑reloads on file changes.
+  - `require`/`dofile` are disabled in the sandbox; keep logic in one file (or implement your own loader on the host).
 - Lifecycle (define these globals in your script):
   - `function on_start()` — create entities, load textures, pre‑size arrays
   - `function on_update(dt)` — update positions/state and submit arrays every frame
@@ -37,7 +39,7 @@ Demo: A simple Pong‑like script is provided in `scripts/game.lua` (controls: `
     - `local T = engine.create_transform_buffer(cap)` with `T:set(i, id, x, y, rot, sx, sy)` or `T:set_px(i, id, x_px, y_px, rot, w_px, h_px)`; submit via `engine.set_transforms(T)`.
     - `local S = engine.create_sprite_buffer(cap)` with `S:set(i, id, tex, u0, v0, u1, v1, r, g, b, a)`, `S:set_tex`, `S:set_uv_rect`, `S:set_color`, `S:set_named_uv(i, atlas, name)`; submit via `engine.submit_sprites(S)`.
     - Optional builder: `local fb = engine.frame_builder(T, S)` then `fb:transform(i, id, x,y,rot,sx,sy)`, `fb:transform_px(i, id, x_px,y_px,rot,w_px,h_px)`, `fb:sprite_uv(i, id, u0,v0,u1,v1)`, `fb:sprite_tex(i, id, tex, u0,v0,u1,v1, r,g,b,a)`, `fb:sprite_named(i, id, atlas, name, r,g,b,a)`, `fb:sprite_color(i, r,g,b,a)`, and finalize with `fb:commit()`.
-  - Legacy v2 arrays: still supported for portability
+  - Legacy v2 arrays: still supported
     - `engine.set_transforms(arr)` stride=6: `id, x, y, rot, sx, sy`
     - `engine.submit_sprites(arr)` stride=10: `id, tex, u0, v0, u1, v1, r, g, b, a`
 - Time, input, window
@@ -45,10 +47,11 @@ Demo: A simple Pong‑like script is provided in `scripts/game.lua` (controls: `
   - `engine.get_input() -> snapshot` (methods: `get_key(name)`, `get_mouse_button(name)`, `mouse_pos()`)
   - Common key names: `KeyW`, `KeyS`, `ArrowUp`, `ArrowDown`
   - `engine.window_size() -> (w, h)`
-- Persistence & metrics
+- Persistence, metrics, HUD
   - `engine.persist(key, value)` / `engine.restore(key)` (in‑process KV)
   - `engine.get_metrics() -> { cpu_frame_ms, sprites_submitted, ffi_calls }`
-  - `engine.log(level, msg)` where level is `"info"|"warn"|"error"|"debug"`
+  - `engine.hud_printf(msg)` prints a line on the HUD (rate‑limited)
+  - `engine.log(level, msg)` (`info|warn|error|debug`, rate‑limited)
 
 ### Minimal Script Skeleton
 ```lua
@@ -124,21 +127,26 @@ end
 - sprite_color: `fb:sprite_color(i, r, g, b, a)`
 - commit: `fb:commit()`
 
+### HUD & Logging
+- `engine.hud_printf("L:1 R:0 fps=60.0")` shows on‑screen; max ~12 lines kept, 30 msgs/sec rate limit.
+- `engine.log("warn", "message")` emits to tracing; console defaults to WARN level.
+
 ### Performance Tips
-- Reuse `transforms` and `sprites` tables; overwrite in place.
-- Use flat v2 arrays and keep to one `set_transforms` + one `submit_sprites` per frame.
-- Batch by texture: prefer atlases/texture arrays; group sprites sharing the same texture.
+- Prefer typed buffers + frame builder. Reuse buffers; overwrite rows in place.
+- Aim for one `engine.set_transforms(...)` + one `engine.submit_sprites(...)` per frame.
+- Batch by texture (use atlases). Keep SpriteBuffer small and tight to active rows.
+- Transforms are f32 internally; rebuild them each frame; sprites can be updated only when attributes change.
 
 ## Project Layout
-- `crates/engine_core/`: window, renderer, input, time, metrics, state
-- `crates/engine_scripting/`: Lua sandbox + API bindings
-- `host/`: entrypoint binary (`luarite`) wiring providers (metrics/input/window)
-- `scripts/`: gameplay Lua scripts (entry at `scripts/game.lua` by default)
-- `assets/`: optional textures (falls back to white if missing)
+- `crates/engine_core/`: window, renderer, HUD, offscreen, input, time, metrics, state
+- `crates/engine_scripting/`: Lua sandbox + API bindings (typed buffers, builder, atlas)
+- `host/`: desktop runner (`luarite`) wiring (hot‑reload, record/replay, input)
+- `scripts/`: Lua scripts (entry at `scripts/game.lua`)
+- `assets/`: textures/atlases (falls back to white if missing)
 
 ## Testing
-- Scripting crate: `cargo test -p engine_scripting`
-  - Unit tests (inline), integration/property tests under `crates/engine_scripting/tests/`
+- Workspace: `cargo test` (unit + integration + offscreen e2e)
+- Host e2e tests live in `host/tests` and catch regressions (no‑flicker, persistence, precedence).
 
 ## Notes
-- This is a POC aiming for a secure, deterministic scripting model. Hot‑reload, determinism (record/replay), richer metrics, and packaging are planned next.
+- POC focused on secure, deterministic scripting. Record/replay and richer metrics available; features are evolving.

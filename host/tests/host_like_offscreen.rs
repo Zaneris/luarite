@@ -77,8 +77,10 @@ fn host_drain_swaps_typed_buffers_and_renders() {
     }
     if let Some((rcs, rows, cap)) = exm.s_buf.take() {
         let mut v = rcs.borrow_mut();
-        state.swap_sprites_with_len(&mut v, rows);
-        v.resize(cap, SpriteData { entity_id: 0, texture_id: 0, uv: [0.0;4], color: [0.0;4] });
+        // New path: swap into back, promote to front, then restore Lua vec
+        state.swap_typed_sprites_into_back(&mut v, rows);
+        state.promote_sprites_back_to_front();
+        state.restore_lua_sprite_vec(&mut v, cap);
     }
 
     // Render offscreen and assert center pixel is magenta-ish

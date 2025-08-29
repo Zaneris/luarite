@@ -131,22 +131,42 @@ impl LuaSandbox {
     }
 
     pub fn load_script(&self, script_content: &str, script_name: &str) -> Result<()> {
-        let safe: Table = match self.lua.named_registry_value("safe_base") {
-            Ok(t) => t,
-            Err(e) => return Err(anyhow::Error::msg(format!("get safe_base failed: {}", e))),
-        };
-        // Inject engine into environment if present globally
+        let safe_base: Table = self
+            .lua
+            .named_registry_value("safe_base")
+            .map_err(|e| anyhow::Error::msg(format!("get safe_base failed: {}", e)))?;
+
+        // Create a fresh environment whose __index points to safe_base
+        let env = self
+            .lua
+            .create_table()
+            .map_err(|e| anyhow::Error::msg(format!("create_table failed: {}", e)))?;
+        let mt = self
+            .lua
+            .create_table()
+            .map_err(|e| anyhow::Error::msg(format!("create_table failed: {}", e)))?;
+        mt.set("__index", safe_base)
+            .map_err(|e| anyhow::Error::msg(format!("set __index failed: {}", e)))?;
+        env.set_metatable(Some(mt));
+
+        // Inject engine into env if present
         if let Ok(engine_tbl) = self.lua.globals().get::<Table>("engine") {
-            if let Err(e) = safe.set("engine", engine_tbl) {
-                return Err(anyhow::Error::msg(format!("safe.set engine failed: {}", e)));
-            }
+            env.set("engine", engine_tbl)
+                .map_err(|e| anyhow::Error::msg(format!("env.set engine failed: {}", e)))?;
         }
+
+        // Load and run chunk in this environment
         let chunk = self.lua.load(script_content).set_name(script_name);
-        let chunk = chunk.set_environment(safe);
-        match chunk.exec() {
-            Ok(()) => Ok(()),
-            Err(e) => Err(anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e))),
-        }
+        let chunk = chunk.set_environment(env.clone());
+        chunk
+            .exec()
+            .map_err(|e| anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e)))?;
+
+        // Remember current env for function lookups
+        self.lua
+            .set_named_registry_value("current_env", env)
+            .map_err(|e| anyhow::Error::msg(format!("set current_env failed: {}", e)))?;
+        Ok(())
     }
 
     pub fn call_function<A, R>(&self, func_name: &str, args: A) -> Result<R>
@@ -154,16 +174,14 @@ impl LuaSandbox {
         A: mlua::IntoLuaMulti,
         R: mlua::FromLuaMulti,
     {
-        let globals = self.lua.globals();
-        let func: Function = match globals.get(func_name) {
-            Ok(f) => f,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Function '{}' not found: {}",
-                    func_name, e
-                )))
-            }
-        };
+        // Look up function in the current environment first
+        let env: Table = self
+            .lua
+            .named_registry_value("current_env")
+            .map_err(|e| anyhow::anyhow!("get current_env failed: {}", e))?;
+        let func: Function = env
+            .get(func_name)
+            .map_err(|e| anyhow::anyhow!("Function '{}' not found: {}", func_name, e))?;
 
         match func.call(args) {
             Ok(result) => Ok(result),

@@ -839,4 +839,5 @@ mod tests {
         assert!((s.b - 0.25).abs() < 1e-6);
         assert!((s.a - 1.0).abs() < 1e-6);
     }
+
 }

@@ -1,9 +1,8 @@
 use anyhow::Result;
-use glam::{Mat4, Vec2, Vec4};
-use wgpu::util::DeviceExt;
+use glam::{Mat4, Vec2};
 
 use crate::renderer::SpriteVertex;
-use crate::state::{EngineState, SpriteData};
+use crate::state::EngineState;
 
 pub struct OffscreenRenderer {
     device: wgpu::Device,
@@ -12,7 +11,8 @@ pub struct OffscreenRenderer {
     width: u32,
     height: u32,
     render_pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
+    // kept to maintain bind group backing; not otherwise read
+    _uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     white_texture_view: wgpu::TextureView,
@@ -99,7 +99,7 @@ impl OffscreenRenderer {
         let proj = Mat4::orthographic_lh(0.0, width as f32, 0.0, height as f32, -1000.0, 1000.0);
         queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&proj.to_cols_array()));
 
-        Ok(Self { device, queue, format, width, height, render_pipeline, uniform_buffer, uniform_bind_group, texture_bind_group_layout, white_texture_view, white_sampler, vertex_buffer, index_buffer })
+        Ok(Self { device, queue, format, width, height, render_pipeline, _uniform_buffer: uniform_buffer, uniform_bind_group, texture_bind_group_layout, white_texture_view, white_sampler, vertex_buffer, index_buffer })
     }
 
     pub fn render_state_to_rgba(&self, state: &EngineState) -> Result<Vec<u8>> {
@@ -202,7 +202,7 @@ impl OffscreenRenderer {
         buffer_slice.map_async(wgpu::MapMode::Read, move |_| {});
         self.device.poll(wgpu::Maintain::Wait);
         let data = buffer_slice.get_mapped_range().to_vec();
-        drop(buffer_slice);
+        let _ = buffer_slice;
         staging.unmap();
         Ok(data)
     }

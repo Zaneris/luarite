@@ -31,7 +31,7 @@ fn quads_visible_at_edges_y_up() {
 
     let rdr = pollster::block_on(OffscreenRenderer::new(w, h)).unwrap();
     let rgba = rdr.render_state_to_rgba(&state).unwrap();
-    let mut sample = |x: u32, y: u32| {
+    let sample = |x: u32, y: u32| {
         let idx = ((y * w + x) * 4) as usize;
         (rgba[idx] as i32, rgba[idx + 1] as i32, rgba[idx + 2] as i32)
     };
@@ -44,4 +44,3 @@ fn quads_visible_at_edges_y_up() {
         assert!(ri > 180 && gi < 60 && bi > 180, "unexpected color {},{},{}", ri, gi, bi);
     }
 }
-

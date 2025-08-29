@@ -1141,10 +1141,4 @@ impl UserData for FrameBuilder {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    
-
-}
+// (no tests in this module)

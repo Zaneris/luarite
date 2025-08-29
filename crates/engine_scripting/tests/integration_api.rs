@@ -24,13 +24,16 @@ fn sinks_integration_end_to_end() {
         Rc::new(move |slice| {
             *st_cap.borrow_mut() = Some(slice.to_vec());
         }),
+        None,
         Rc::new(move |sprites| {
             *sp_cap.borrow_mut() = sprites.to_vec();
         }),
+        None,
         metrics,
         Rc::new(move |path, id| tex_ev2.borrow_mut().push((path, id))),
         Rc::new(|| InputSnapshot::default()),
         Rc::new(|| (1024, 768)),
+        Rc::new(|_| {}),
     )
     .unwrap();
 
@@ -78,11 +81,14 @@ fn input_provider_is_accessible_from_lua() {
     api.setup_engine_namespace_with_sinks_and_metrics(
         &lua,
         Rc::new(|_| {}),
+        None,
         Rc::new(|_| {}),
+        None,
         Rc::new(|| (0.0, 0, 0)),
         Rc::new(|_, _| {}),
         input_provider,
         Rc::new(|| (1024, 768)),
+        Rc::new(|_| {}),
     )
     .unwrap();
 
@@ -110,11 +116,14 @@ fn metrics_provider_roundtrip() {
     api.setup_engine_namespace_with_sinks_and_metrics(
         &lua,
         Rc::new(|_| {}),
+        None,
         Rc::new(|_| {}),
+        None,
         metrics,
         Rc::new(|_, _| {}),
         Rc::new(|| InputSnapshot::default()),
         Rc::new(|| (1024, 768)),
+        Rc::new(|_| {}),
     )
     .unwrap();
 
@@ -131,6 +140,28 @@ fn metrics_provider_roundtrip() {
     assert!((cpu - 12.34).abs() < 1e-6);
     assert_eq!(sprites, 7);
     assert_eq!(ffi, 2);
+}
+
+#[test]
+fn rng_seed_is_deterministic() {
+    let lua = Lua::new();
+    let api = EngineApi::new();
+    api.setup_engine_namespace(&lua).unwrap();
+
+    let script = r#"
+        function seq()
+            engine.seed(42)
+            local a = engine.random()
+            local b = engine.random()
+            return a, b
+        end
+    "#;
+    lua.load(script).exec().unwrap();
+    let globals = lua.globals();
+    let f: mlua::Function = globals.get("seq").unwrap();
+    let (a1,b1): (f64,f64) = f.call::<(f64,f64)>(()).unwrap();
+    let (a2,b2): (f64,f64) = f.call::<(f64,f64)>(()).unwrap();
+    assert!((a1-a2).abs() < 1e-12 && (b1-b2).abs() < 1e-12);
 }
 
 #[test]

@@ -1,39 +1,40 @@
 # Repository Guidelines
 
-## Project Structure & Modules
-- `crates/engine_core/`: window loop (winit), renderer (wgpu), input, time, metrics, state.
-- `crates/engine_scripting/`: Lua sandbox (whitelisted safe_base) and API bindings.
-- `host/`: binary entrypoint (`luarite`), wires providers (metrics/input/window).
-- `scripts/`: gameplay Lua (see `scripts/game.lua` for Pong demo).
-- `assets/`: textures and other runtime assets (optional).
+## Project Structure & Module Organization
 
-## Build, Test, and Dev
-- `cargo run -p luarite`: run the engine + current script.
-- `cargo build` / `cargo check`: build or type-check workspace.
-- `cargo fmt --all` and `cargo clippy --all-targets -- -D warnings`: format + lint.
-- `cargo test -p engine_scripting`: run unit + integration + property tests.
-  - Integration tests live under `crates/engine_scripting/tests/`.
+- crates/engine_core: renderer, window/event loop, timing/metrics, and EngineState (transforms, sprites, textures). Also includes the offscreen renderer for GPU‑free tests.
+- crates/engine_scripting: Lua API (mlua), sandboxing, typed buffers (TransformBuffer, SpriteBuffer), and frame builder.
+- host: desktop runner; wires Lua sinks to EngineState (zero‑copy where safe), hot‑reload, record/replay.
+- assets/: textures/atlases. scripts/: Lua gameplay (e.g., Pong). Tests in crates/*/tests and host/tests.
 
-## Coding Style & Conventions
-- Rust 2021; 4-space indent; ~100 col wrap; idiomatic modules (`snake_case`).
-- Types/traits: `CamelCase`; functions/vars: `snake_case`; consts: `SCREAMING_SNAKE_CASE`.
-- Coordinate system: Y-up for world/screen (origin at bottom, +Y up). Sizes/positions are in pixels.
+## Build, Test, and Development Commands
 
-## Script API (essentials)
-- `engine.api_version` (u32) and `engine.get_capabilities()`.
-- `engine.create_entity() -> id`, `engine.load_texture(path) -> tex`.
-- `engine.set_transforms(arr)` stride=6: `id,x,y,rot,sx,sy` (v2 arrays).
-- `engine.submit_sprites(arr)` stride=10: `id,tex,u0,v0,u1,v1,r,g,b,a`.
-- `engine.get_input() -> snapshot` (e.g., `get_key("KeyW")`).
-- `engine.window_size() -> (w,h)`; `engine.time()`.
-- `engine.persist(key,val)` / `engine.restore(key)`; `engine.log(level,msg)`; `engine.get_metrics()`.
+- Build: `cargo build` — compiles all workspace crates.
+- Test: `cargo test` — runs unit/integration and offscreen render tests.
+- Run host: `cargo run -p luarite` — launches the desktop runner.
+- Record/Replay: `cargo run -p luarite -- --record out.log` or `--replay out.log`.
+
+## Coding Style & Naming Conventions
+
+- Rust 2021. Types in PascalCase; functions/fields/variables in snake_case (e.g., EngineState, SpriteData, set_transforms_from_f32_slice).
+- Prefer typed buffers/builders over ad‑hoc tables. Keep APIs minimal and explicit.
+- Logging via tracing; concise messages, avoid per‑frame spam. Keep HUD/log rate‑limited.
 
 ## Testing Guidelines
-- Unit tests inline with modules for focused behavior.
-- Integration/property tests under `crates/engine_scripting/tests/` (proptest for v2 arrays).
-- Cover env loading, provider overrides, marshalling, and persistence.
 
-## Commit & PRs
-- Commits: imperative, concise subject; explain “why” in body if non-trivial.
-- PRs: describe changes, link issues, include logs/screenshots if rendering/UI affected.
-- Keep `fmt`/`clippy` clean; include run/test instructions if setup changes.
+- Use Rust’s built‑in test harness. Place e2e/offscreen tests with the owning crate.
+- Offscreen assertions sample a few pixels with thresholds (e.g., r>200, g<40, b>200) to avoid GPU variance.
+- Host e2e tests cover typed drains, mixed‑path precedence, persistence across frames, and no‑flicker cadences.
+- Name tests for behavior (e.g., flicker_guard, persistence_static_sprites, mixed_path_precedence).
+
+## Commit & Pull Request Guidelines
+
+- Commits: imperative, present tense, concise (e.g., "Fix typed sprite drain"). Group related changes.
+- PRs: include summary, rationale, test coverage, repro steps, and linked issues. Add screenshots/recordings for visual changes.
+
+## Security & Configuration Tips
+
+- Keep the Lua sandbox strict; do not widen file/system access. Avoid blocking I/O in the frame loop.
+- Avoid introducing network dependencies in tests; feature‑gate if necessary.
+- Data flow: Lua → typed buffers → host drain (swap for transforms; copy for sprites) → EngineState → renderer (window/offscreen).
+

@@ -9,3 +9,7 @@ engine_scripting = { path = "../crates/engine_scripting" }
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+mlua.workspace = true
+pollster.workspace = true

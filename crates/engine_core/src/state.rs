@@ -15,7 +15,7 @@ pub struct SpriteData {
 #[derive(Debug)]
 pub struct EngineState {
     // Transform data (v2 flat array format)
-    transform_buffer: Vec<f64>, // stride=6: [id, x, y, rot, sx, sy, ...]
+    transform_buffer: Vec<f32>, // stride=6: [id, x, y, rot, sx, sy, ...]
 
     // Sprite data (engine-native representation)
     sprites: Vec<SpriteData>,
@@ -105,7 +105,9 @@ impl EngineState {
         let max_entities = 10_000usize;
         let elems = transforms.len().min(max_entities * 6);
         self.transform_buffer.clear();
-        self.transform_buffer.extend_from_slice(&transforms[..elems]);
+        // Convert to f32 for internal storage
+        self.transform_buffer
+            .extend(transforms[..elems].iter().map(|v| *v as f32));
         self.ffi_calls_this_frame += 1;
 
         tracing::debug!("Set {} transforms", transforms.len() / 6);
@@ -122,13 +124,30 @@ impl EngineState {
         let max_entities = 10_000usize;
         let elems = transforms.len().min(max_entities * 6);
         self.transform_buffer.clear();
-        self.transform_buffer.extend_from_slice(&transforms[..elems]);
+        self.transform_buffer
+            .extend(transforms[..elems].iter().map(|v| *v as f32));
         self.ffi_calls_this_frame += 1;
         tracing::debug!("Set {} transforms", elems / 6);
         Ok(())
     }
 
-    pub fn get_transforms(&self) -> &[f64] {
+    pub fn set_transforms_from_f32_slice(&mut self, transforms: &[f32]) -> Result<()> {
+        if transforms.len() % 6 != 0 {
+            return Err(anyhow::anyhow!(
+                "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)",
+                transforms.len() % 6
+            ));
+        }
+        let max_entities = 10_000usize;
+        let elems = transforms.len().min(max_entities * 6);
+        self.transform_buffer.clear();
+        self.transform_buffer.extend_from_slice(&transforms[..elems]);
+        self.ffi_calls_this_frame += 1;
+        tracing::debug!("Set {} transforms (f32)", elems / 6);
+        Ok(())
+    }
+
+    pub fn get_transforms(&self) -> &[f32] {
         &self.transform_buffer
     }
 
@@ -158,6 +177,15 @@ impl EngineState {
         self.ffi_calls_this_frame += 1;
         tracing::debug!("Submitted {} sprites", self.sprites.len());
         Ok(())
+    }
+
+    pub fn swap_sprites_with_len(&mut self, script_vec: &mut Vec<SpriteData>, len: usize) {
+        use std::cmp::min;
+        std::mem::swap(&mut self.sprites, script_vec);
+        let take = min(self.sprites.len(), len);
+        self.sprites.truncate(take);
+        self.ffi_calls_this_frame += 1;
+        tracing::debug!("Swapped sprites buffer ({} sprites)", take);
     }
 
     pub fn get_sprites(&self) -> &[SpriteData] {
@@ -208,6 +236,32 @@ impl EngineState {
 
     pub fn window_size(&self) -> (u32, u32) {
         (self.window_width, self.window_height)
+    }
+
+    // Determinism: compute a stable hash of the transform buffer
+    pub fn compute_transform_hash(&self) -> u64 {
+        // FNV-1a 64-bit over f64 bit patterns
+        let mut hash: u64 = 0xcbf29ce484222325;
+        let prime: u64 = 0x100000001b3;
+        for v in &self.transform_buffer {
+            let bits = v.to_bits();
+            let b = bits.to_le_bytes();
+            for byte in b {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(prime);
+            }
+        }
+        hash
+    }
+
+    // Zero-copy swap of the transform buffer with a script-owned buffer, taking only `elems` items
+    pub fn swap_transform_buffer_with_len(&mut self, script_buf: &mut Vec<f32>, elems: usize) {
+        use std::cmp::min;
+        std::mem::swap(&mut self.transform_buffer, script_buf);
+        let take = min(self.transform_buffer.len(), elems);
+        self.transform_buffer.truncate(take);
+        self.ffi_calls_this_frame += 1;
+        tracing::debug!("Swapped transform buffer ({} elems)", take / 6);
     }
 }
 

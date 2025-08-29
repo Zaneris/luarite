@@ -75,7 +75,7 @@ function on_update(dt)
   fb:transform_px(1, e, 100, 100 + 60*dt, 0.0, 64, 64)
   fb:commit()
 end
-
+```
 ### Atlas + Builder Example
 ```lua
 assert(engine.api_version == 1)

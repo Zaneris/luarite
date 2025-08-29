@@ -41,6 +41,9 @@ fn main() -> Result<()> {
     }
     let hud_metrics = Arc::new(Mutex::new(HudMetrics::default()));
 
+    // Create window early to access input handle for providers
+    let mut window = EngineWindow::new();
+
     // Install engine namespace with sinks that fill the exchange
     {
         let ex1 = exchange.clone();
@@ -76,19 +79,30 @@ fn main() -> Result<()> {
                 }
             })
         };
+        // Input provider closure builds an InputSnapshot from EngineWindow input
+        let input_handle = window.input_handle();
+        let input_provider = Rc::new(move || {
+            let mut snap = engine_scripting::api::InputSnapshot::new();
+            if let Ok(inp) = input_handle.lock() {
+                snap.mouse_x = inp.mouse_x;
+                snap.mouse_y = inp.mouse_y;
+                for k in inp.keys.iter() { snap.keys.insert(k.clone(), true); }
+                for b in inp.mouse_buttons.iter() { snap.mouse_buttons.insert(b.clone(), true); }
+            }
+            snap
+        });
         api.setup_engine_namespace_with_sinks_and_metrics(
             sandbox.lua(),
             set_transforms_cb,
             submit_sprites_cb,
             hud_provider,
             load_texture_cb,
+            input_provider,
         )?;
     }
 
     // Load the main game script
     sandbox.load_script(include_str!("../../scripts/game.lua"), "game.lua")?;
-
-    let mut window = EngineWindow::new();
 
     // Wire script lifecycle into engine window
     {

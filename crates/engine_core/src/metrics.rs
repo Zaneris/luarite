@@ -96,6 +96,13 @@ impl MetricsCollector {
             .fetch_add(sprite_count, Ordering::Relaxed);
     }
 
+    pub fn record_draws(&self, draw_calls: u32, sprites: u32) {
+        self.draw_calls_this_frame
+            .fetch_add(draw_calls, Ordering::Relaxed);
+        self.sprites_this_frame
+            .fetch_add(sprites, Ordering::Relaxed);
+    }
+
     pub fn record_lua_gc(&mut self, duration: Duration, memory_mb: f64) {
         self.current_frame.lua_gc_time_ms = duration.as_secs_f64() * 1000.0;
         self.current_frame.lua_mem_mb = memory_mb;

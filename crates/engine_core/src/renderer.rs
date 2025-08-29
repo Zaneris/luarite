@@ -168,6 +168,7 @@ pub struct SpriteRenderer {
     
     // Batches for per-texture draws
     batches: Vec<DrawBatch>,
+    last_draw_calls: u32,
 
     // Transforms for entity management
     transforms: std::collections::HashMap<u32, Transform>,
@@ -374,6 +375,7 @@ impl SpriteRenderer {
             texture_bind_groups: Vec::new(),
             white_texture,
             batches: Vec::with_capacity(64),
+            last_draw_calls: 0,
             transforms: std::collections::HashMap::new(),
         })
     }
@@ -653,12 +655,17 @@ impl SpriteRenderer {
             let end = self.sprite_indices.len() as u32;
             self.batches.push(DrawBatch { texture_id: tex_id, start_index: start, index_count: end - start });
         }
+        self.last_draw_calls = self.batches.len() as u32;
 
         Ok(())
     }
 
     pub fn get_sprite_count(&self) -> u32 {
         (self.sprite_vertices.len() / 4) as u32
+    }
+
+    pub fn get_draw_call_count(&self) -> u32 {
+        self.last_draw_calls
     }
 
     fn ensure_texture_cached(&mut self, tex_id: u32, bytes: &[u8]) -> Result<()> {

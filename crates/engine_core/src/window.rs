@@ -1,5 +1,6 @@
 use crate::metrics::MetricsCollector;
 use crate::renderer::SpriteRenderer;
+use crate::input::InputState;
 use crate::state::EngineState;
 use crate::time::FixedTimeStep;
 use anyhow::Result;
@@ -28,6 +29,8 @@ pub struct EngineWindow {
     script_on_start: Option<OnStartCb>,
     script_on_update: Option<OnUpdateCb>,
     on_end_frame: Option<OnEndFrameCb>,
+    // Input
+    pub(crate) input: std::sync::Arc<std::sync::Mutex<InputState>>,
 }
 
 impl EngineWindow {
@@ -43,6 +46,7 @@ impl EngineWindow {
             script_on_start: None,
             script_on_update: None,
             on_end_frame: None,
+            input: std::sync::Arc::new(std::sync::Mutex::new(InputState::new())),
         }
     }
 
@@ -81,6 +85,10 @@ impl EngineWindow {
         F: FnMut(&EngineState, &MetricsCollector) + 'static,
     {
         self.on_end_frame = Some(Box::new(f));
+    }
+
+    pub fn input_handle(&self) -> std::sync::Arc<std::sync::Mutex<InputState>> {
+        self.input.clone()
     }
 }
 
@@ -128,6 +136,42 @@ impl ApplicationHandler for EngineWindow {
                 tracing::debug!("Window resized: {:?}", physical_size);
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(physical_size);
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Ok(mut input) = self.input.lock() {
+                    input.set_mouse_pos(position.x as f64, position.y as f64);
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                use winit::event::{ElementState, MouseButton};
+                let name = match button {
+                    MouseButton::Left => "MouseLeft",
+                    MouseButton::Right => "MouseRight",
+                    MouseButton::Middle => "MouseMiddle",
+                    MouseButton::Back => "MouseBack",
+                    MouseButton::Forward => "MouseForward",
+                    MouseButton::Other(_) => return,
+                };
+                let down = matches!(state, ElementState::Pressed);
+                if let Ok(mut input) = self.input.lock() {
+                    input.set_mouse_button(name.to_string(), down);
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                use winit::event::ElementState;
+                use winit::keyboard::{Key, PhysicalKey};
+                let down = matches!(event.state, ElementState::Pressed);
+                let key_name = match event.physical_key {
+                    PhysicalKey::Code(code) => format!("{:?}", code),
+                    PhysicalKey::Unidentified(_) => match &event.logical_key {
+                        Key::Named(n) => format!("{:?}", n),
+                        Key::Character(s) => s.to_string(),
+                        _ => "Unknown".to_string(),
+                    },
+                };
+                if let Ok(mut input) = self.input.lock() {
+                    input.set_key(key_name, down);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -203,6 +247,7 @@ impl ApplicationHandler for EngineWindow {
                 if elapsed.as_micros() > 2_000 {
                     // > 2ms
                     tracing::warn!("Watchdog: on_update took {:?}", elapsed);
+                    self.metrics.record_watchdog_spike();
                 }
             }
         });

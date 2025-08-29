@@ -16,41 +16,55 @@ impl LuaSandbox {
     fn setup_safe_environment(&self) -> Result<()> {
         let globals = self.lua.globals();
 
-        // Remove dangerous globals first
-        self.remove_dangerous_globals(&globals)?;
-
-        // Lock package system
-        self.lock_package_system(&globals)?;
-
-        Ok(())
-    }
-
-    fn remove_dangerous_globals(&self, globals: &Table) -> Result<()> {
-        // Remove dangerous functions and libraries
-        let dangerous_globals = vec![
-            "io",
-            "print",
-            "os",
-            "require",
-            "dofile",
-            "loadfile",
-            "load",
-            "debug",
-            "package",
-            "collectgarbage",
-            "getfenv",
-            "setfenv",
-        ];
-
-        for global_name in dangerous_globals {
-            if let Err(e) = globals.set(global_name, Value::Nil) {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to remove {}: {}",
-                    global_name, e
-                )));
+        // Build a whitelisted environment (safe_base)
+        let safe = match self.lua.create_table() {
+            Ok(t) => t,
+            Err(e) => return Err(anyhow::Error::msg(format!("create_table failed: {}", e))),
+        };
+        for name in [
+            "assert", "pairs", "ipairs", "next", "tonumber", "tostring", "type",
+        ] {
+            if let Ok(v) = globals.get::<Value>(name) {
+                if let Err(e) = safe.set(name, v) {
+                    return Err(anyhow::Error::msg(format!("safe.set {} failed: {}", name, e)));
+                }
+            }
+        }
+        for lib in ["math", "table", "utf8"] {
+            if let Ok(v) = globals.get::<Value>(lib) {
+                if let Err(e) = safe.set(lib, v) {
+                    return Err(anyhow::Error::msg(format!("safe.set {} failed: {}", lib, e)));
+                }
+            }
+        }
+        if let Ok(string_tbl) = globals.get::<Table>("string") {
+            if let Err(e) = safe.set("string", string_tbl) {
+                return Err(anyhow::Error::msg(format!("safe.set string failed: {}", e)));
+            }
+        }
+        // Limited debug.traceback
+        if let Ok(debug_tbl) = globals.get::<Table>("debug") {
+            if let Ok(tb) = debug_tbl.get::<Function>("traceback") {
+                let dbg = match self.lua.create_table() {
+                    Ok(t) => t,
+                    Err(e) => return Err(anyhow::Error::msg(format!("create_table failed: {}", e))),
+                };
+                if let Err(e) = dbg.set("traceback", tb) {
+                    return Err(anyhow::Error::msg(format!("dbg.set traceback failed: {}", e)));
+                }
+                if let Err(e) = safe.set("debug", dbg) {
+                    return Err(anyhow::Error::msg(format!("safe.set debug failed: {}", e)));
+                }
             }
         }
 
+        // Lock package system on globals (affects any accidental access)
+        self.lock_package_system(&globals)?;
+
+        // Store safe_base for use when loading scripts
+        if let Err(e) = self.lua.set_named_registry_value("safe_base", safe) {
+            return Err(anyhow::Error::msg(format!("set_named_registry_value failed: {}", e)));
+        }
         Ok(())
     }
 
@@ -117,12 +131,21 @@ impl LuaSandbox {
     }
 
     pub fn load_script(&self, script_content: &str, script_name: &str) -> Result<()> {
-        match self.lua.load(script_content).set_name(script_name).exec() {
+        let safe: Table = match self.lua.named_registry_value("safe_base") {
+            Ok(t) => t,
+            Err(e) => return Err(anyhow::Error::msg(format!("get safe_base failed: {}", e))),
+        };
+        // Inject engine into environment if present globally
+        if let Ok(engine_tbl) = self.lua.globals().get::<Table>("engine") {
+            if let Err(e) = safe.set("engine", engine_tbl) {
+                return Err(anyhow::Error::msg(format!("safe.set engine failed: {}", e)));
+            }
+        }
+        let chunk = self.lua.load(script_content).set_name(script_name);
+        let chunk = chunk.set_environment(safe);
+        match chunk.exec() {
             Ok(()) => Ok(()),
-            Err(e) => Err(anyhow::Error::msg(format!(
-                "Failed to load script {}: {}",
-                script_name, e
-            ))),
+            Err(e) => Err(anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e))),
         }
     }
 

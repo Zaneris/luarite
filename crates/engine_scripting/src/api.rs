@@ -114,8 +114,7 @@ pub struct EngineApi {
     next_entity_id: u32,
     next_texture_id: u32,
     fixed_time: Rc<RefCell<f64>>, // shared with time() closure
-    #[allow(dead_code)] // TODO: will be used in persist/restore system
-    persistence_store: HashMap<String, Value>,
+    persistence_store: Rc<RefCell<HashMap<String, Value>>>,
     #[allow(dead_code)] // TODO: will be used for capability queries
     capabilities: EngineCapabilities,
 }
@@ -126,7 +125,7 @@ impl EngineApi {
             next_entity_id: 1,
             next_texture_id: 1,
             fixed_time: Rc::new(RefCell::new(0.0)),
-            persistence_store: HashMap::new(), // TODO: will be used in persist/restore system
+            persistence_store: Rc::new(RefCell::new(HashMap::new())),
             capabilities: EngineCapabilities::default(), // TODO: will be used for capability queries
         }
     }
@@ -301,9 +300,10 @@ impl EngineApi {
         }
 
         // Persistence system
-        let persist_func = match lua.create_function(|_, (key, _value): (String, Value)| {
+        let store_ref = self.persistence_store.clone();
+        let persist_func = match lua.create_function(move |_, (key, value): (String, Value)| {
             tracing::debug!("Persisting key: {}", key);
-            // TODO: Store in actual persistence system
+            store_ref.borrow_mut().insert(key, value);
             Ok(())
         }) {
             Ok(func) => func,
@@ -318,10 +318,14 @@ impl EngineApi {
             return Err(anyhow::Error::msg(format!("Failed to set persist: {}", e)));
         }
 
-        let restore_func = match lua.create_function(|_, key: String| {
+        let store_ref2 = self.persistence_store.clone();
+        let restore_func = match lua.create_function(move |_, key: String| {
             tracing::debug!("Restoring key: {}", key);
-            // TODO: Restore from actual persistence system
-            Ok(Value::Nil)
+            if let Some(v) = store_ref2.borrow().get(&key) {
+                Ok(v.clone())
+            } else {
+                Ok(Value::Nil)
+            }
         }) {
             Ok(func) => func,
             Err(e) => {
@@ -603,6 +607,7 @@ impl EngineApi {
         submit_sprites_cb: Rc<dyn Fn(&[SpriteV2])>,
         metrics_provider: Rc<dyn Fn() -> (f64, u32, u32)>,
         load_texture_cb: Rc<dyn Fn(String, u32)>,
+        input_provider: Rc<dyn Fn() -> InputSnapshot>,
     ) -> Result<()> {
         // First install base + sinks
         self.setup_engine_namespace_with_sinks(
@@ -632,6 +637,15 @@ impl EngineApi {
         engine_table
             .set("get_metrics", metrics_func)
             .map_err(|e| anyhow::Error::msg(format!("Failed to set get_metrics: {}", e)))?;
+
+        // Override get_input using provider
+        let input_p = input_provider.clone();
+        let input_func = lua
+            .create_function(move |_, ()| Ok(input_p()))
+            .map_err(|e| anyhow::Error::msg(format!("Failed to override get_input: {}", e)))?;
+        engine_table
+            .set("get_input", input_func)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to set get_input: {}", e)))?;
 
         // Override load_texture to notify host and return a handle immediately
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);

@@ -30,6 +30,7 @@ fn sinks_integration_end_to_end() {
         metrics,
         Rc::new(move |path, id| tex_ev2.borrow_mut().push((path, id))),
         Rc::new(|| InputSnapshot::default()),
+        Rc::new(|| (1024, 768)),
     )
     .unwrap();
 
@@ -81,6 +82,7 @@ fn input_provider_is_accessible_from_lua() {
         Rc::new(|| (0.0, 0, 0)),
         Rc::new(|_, _| {}),
         input_provider,
+        Rc::new(|| (1024, 768)),
     )
     .unwrap();
 
@@ -112,6 +114,7 @@ fn metrics_provider_roundtrip() {
         metrics,
         Rc::new(|_, _| {}),
         Rc::new(|| InputSnapshot::default()),
+        Rc::new(|| (1024, 768)),
     )
     .unwrap();
 
@@ -148,4 +151,3 @@ fn persistence_roundtrip_lua() {
     let v: f64 = f.call::<f64>(()).unwrap();
     assert!((v - 123.0) < 1e-6);
 }
-

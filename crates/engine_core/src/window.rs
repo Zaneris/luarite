@@ -109,9 +109,11 @@ impl ApplicationHandler for EngineWindow {
                 Ok(window) => {
                     let window_arc = Arc::new(window);
                     tracing::info!("Window created successfully");
-
+                    
                     // Initialize renderer (this is async, we'll handle it in about_to_wait)
                     self.window = Some(window_arc);
+                    // Initialize engine_state window size
+                    self.engine_state.set_window_size(1024, 768);
                 }
                 Err(e) => {
                     tracing::error!("Failed to create window: {}", e);
@@ -137,6 +139,7 @@ impl ApplicationHandler for EngineWindow {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(physical_size);
                 }
+                self.engine_state.set_window_size(physical_size.width, physical_size.height);
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Ok(mut input) = self.input.lock() {

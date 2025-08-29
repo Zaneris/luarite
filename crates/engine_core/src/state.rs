@@ -33,6 +33,10 @@ pub struct EngineState {
 
     // Performance tracking
     ffi_calls_this_frame: u32,
+
+    // Window info
+    window_width: u32,
+    window_height: u32,
 }
 
 impl EngineState {
@@ -46,6 +50,8 @@ impl EngineState {
             next_texture_id: 1,
             fixed_time: 0.0,
             ffi_calls_this_frame: 0,
+            window_width: 1024,
+            window_height: 768,
         }
     }
 
@@ -192,6 +198,16 @@ impl EngineState {
         }
 
         violations
+    }
+
+    // Window size management
+    pub fn set_window_size(&mut self, w: u32, h: u32) {
+        self.window_width = w;
+        self.window_height = h;
+    }
+
+    pub fn window_size(&self) -> (u32, u32) {
+        (self.window_width, self.window_height)
     }
 }
 

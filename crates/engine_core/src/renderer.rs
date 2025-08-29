@@ -400,8 +400,8 @@ impl SpriteRenderer {
         let projection = Mat4::orthographic_lh(
             0.0,
             self.config.width as f32,
-            self.config.height as f32,
             0.0,
+            self.config.height as f32,
             -1000.0,
             1000.0,
         );

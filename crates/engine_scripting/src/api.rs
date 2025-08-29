@@ -608,6 +608,7 @@ impl EngineApi {
         metrics_provider: Rc<dyn Fn() -> (f64, u32, u32)>,
         load_texture_cb: Rc<dyn Fn(String, u32)>,
         input_provider: Rc<dyn Fn() -> InputSnapshot>,
+        window_size_provider: Rc<dyn Fn() -> (u32, u32)>,
     ) -> Result<()> {
         // First install base + sinks
         self.setup_engine_namespace_with_sinks(
@@ -646,6 +647,18 @@ impl EngineApi {
         engine_table
             .set("get_input", input_func)
             .map_err(|e| anyhow::Error::msg(format!("Failed to set get_input: {}", e)))?;
+
+        // Add window_size() -> (w, h)
+        let ws_p = window_size_provider.clone();
+        let ws_func = lua
+            .create_function(move |_, ()| {
+                let (w, h) = ws_p();
+                Ok((w, h))
+            })
+            .map_err(|e| anyhow::Error::msg(format!("Failed to create window_size: {}", e)))?;
+        engine_table
+            .set("window_size", ws_func)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to set window_size: {}", e)))?;
 
         // Override load_texture to notify host and return a handle immediately
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);

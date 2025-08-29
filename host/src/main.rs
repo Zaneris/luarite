@@ -40,6 +40,8 @@ fn main() -> Result<()> {
         ffi_calls: u32,
     }
     let hud_metrics = Arc::new(Mutex::new(HudMetrics::default()));
+    // Window size shared with Lua window_size()
+    let window_size = Arc::new(Mutex::new((1024u32, 768u32)));
 
     // Create window early to access input handle for providers
     let mut window = EngineWindow::new();
@@ -98,6 +100,12 @@ fn main() -> Result<()> {
             hud_provider,
             load_texture_cb,
             input_provider,
+            {
+                let ws = window_size.clone();
+                Rc::new(move || {
+                    if let Ok(v) = ws.lock() { *v } else { (1024,768) }
+                })
+            },
         )?;
     }
 
@@ -165,12 +173,16 @@ fn main() -> Result<()> {
     // Feed HUD metrics from the engine after each frame
     {
         let hm = hud_metrics.clone();
+        let ws_upd = window_size.clone();
         window.set_on_end_frame(move |state, metrics| {
             if let Ok(mut m) = hm.lock() {
                 m.cpu_frame_ms = metrics.current_metrics().cpu_frame_ms;
                 m.ffi_calls = state.get_ffi_calls_this_frame();
                 m.sprites_submitted = state.get_sprites().len() as u32;
             }
+            // Update window size from engine_state
+            let (w,h) = state.window_size();
+            if let Ok(mut wh) = ws_upd.lock() { *wh = (w,h); }
         });
     }
 

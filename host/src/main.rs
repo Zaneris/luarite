@@ -1,13 +1,27 @@
 use anyhow::Result;
 use engine_core::state::SpriteData;
 use engine_core::window::EngineWindow;
-use engine_scripting::api::{EngineApi, SpriteV2};
+use engine_scripting::api::{EngineApi, SpriteV2, InputSnapshot};
 use engine_scripting::sandbox::LuaSandbox;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
+use std::io::BufRead;
 
 fn main() -> Result<()> {
+    // Parse simple CLI flags for record/replay
+    let mut record_path: Option<String> = None;
+    let mut replay_path: Option<String> = None;
+    {
+        let mut args = std::env::args().skip(1);
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--record" => record_path = args.next(),
+                "--replay" => replay_path = args.next(),
+                _ => {}
+            }
+        }
+    }
     tracing_subscriber::fmt()
         .with_max_level(Level::DEBUG)
         .init();
@@ -46,6 +60,12 @@ fn main() -> Result<()> {
     // Create window early to access input handle for providers
     let mut window = EngineWindow::new();
 
+    // Replay snapshot store (shared across providers and frame callbacks)
+    let replay_snapshot_global: Arc<Mutex<InputSnapshot>> = Arc::new(Mutex::new(InputSnapshot::default()));
+
+    // Last-used input snapshot (what scripts actually saw via engine.get_input)
+    let last_used_input_global: Arc<Mutex<InputSnapshot>> = Arc::new(Mutex::new(InputSnapshot::default()));
+
     // Install engine namespace with sinks that fill the exchange
     {
         let ex1 = exchange.clone();
@@ -81,18 +101,36 @@ fn main() -> Result<()> {
                 }
             })
         };
-        // Input provider closure builds an InputSnapshot from EngineWindow input
+        // Input providers (live vs replay)
         let input_handle = window.input_handle();
-        let input_provider = Rc::new(move || {
-            let mut snap = engine_scripting::api::InputSnapshot::new();
+        let last_used_for_live = last_used_input_global.clone();
+        let live_input_provider: Rc<dyn Fn() -> InputSnapshot> = Rc::new(move || {
+            let mut snap = InputSnapshot::default();
             if let Ok(inp) = input_handle.lock() {
                 snap.mouse_x = inp.mouse_x;
                 snap.mouse_y = inp.mouse_y;
                 for k in inp.keys.iter() { snap.keys.insert(k.clone(), true); }
                 for b in inp.mouse_buttons.iter() { snap.mouse_buttons.insert(b.clone(), true); }
             }
+            if let Ok(mut dst) = last_used_for_live.lock() { *dst = snap.clone(); }
             snap
         });
+        // Replay snapshot to be filled each frame (end of frame) if replaying
+        let replay_snapshot = replay_snapshot_global.clone();
+        let last_used_for_replay = last_used_input_global.clone();
+        let replay_input_provider: Rc<dyn Fn() -> InputSnapshot> = {
+            let rs = replay_snapshot.clone();
+            Rc::new(move || {
+                if let Ok(snap) = rs.lock() {
+                    if let Ok(mut dst) = last_used_for_replay.lock() { *dst = snap.clone(); }
+                    return snap.clone();
+                }
+                let d = InputSnapshot::default();
+                if let Ok(mut dst) = last_used_for_replay.lock() { *dst = d.clone(); }
+                d
+            })
+        };
+        let input_provider: Rc<dyn Fn() -> InputSnapshot> = if replay_path.is_some() { replay_input_provider } else { live_input_provider };
         api.setup_engine_namespace_with_sinks_and_metrics(
             sandbox.lua(),
             set_transforms_cb,
@@ -203,6 +241,19 @@ fn main() -> Result<()> {
     {
         let hm = hud_metrics.clone();
         let ws_upd = window_size.clone();
+        let last_used_for_write = last_used_input_global.clone();
+        // Replay snapshot handle for this closure
+        let replay_snapshot_set = replay_snapshot_global.clone();
+        // Optional record/replay handles
+        let mut rec_file = match record_path.clone() {
+            Some(p) => Some(std::fs::File::create(p).expect("create record file")),
+            None => None,
+        };
+        let mut rep_lines: Option<std::io::Lines<std::io::BufReader<std::fs::File>>> = replay_path.clone().map(|p| {
+            let f = std::fs::File::open(p).expect("open replay file");
+            std::io::BufReader::new(f).lines()
+        });
+
         window.set_on_end_frame(move |state, metrics| {
             if let Ok(mut m) = hm.lock() {
                 m.cpu_frame_ms = metrics.current_metrics().cpu_frame_ms;
@@ -212,6 +263,45 @@ fn main() -> Result<()> {
             // Update window size from engine_state
             let (w,h) = state.window_size();
             if let Ok(mut wh) = ws_upd.lock() { *wh = (w,h); }
+
+            // Determinism: compute transform hash
+            let h64 = state.compute_transform_hash();
+
+            // Record: write simple input snapshot + hash per frame
+            if let Some(f) = rec_file.as_mut() {
+                use std::io::Write;
+                // Snapshot exactly what scripts saw via engine.get_input()
+                let mut keys: Vec<String> = Vec::new();
+                let mut btns: Vec<String> = Vec::new();
+                let mut mx = 0.0f64;
+                let mut my = 0.0f64;
+                if let Ok(snap) = last_used_for_write.lock() {
+                    mx = snap.mouse_x; my = snap.mouse_y;
+                    for (k,v) in snap.keys.iter() { if *v { keys.push(k.clone()); } }
+                    for (b,v) in snap.mouse_buttons.iter() { if *v { btns.push(b.clone()); } }
+                }
+                keys.sort(); btns.sort();
+                let keys_s = keys.join("|");
+                let btns_s = btns.join("|");
+                let _ = writeln!(f, "H {}\tK {}\tB {}\tMX {:.3}\tMY {:.3}", h64, keys_s, btns_s, mx, my);
+            }
+            // Replay: read next line, parse snapshot + expected hash; set snapshot for next frame; compare hash
+            if let Some(lines) = rep_lines.as_mut() {
+                if let Some(Ok(line)) = lines.next() {
+                    let mut rs = InputSnapshot::default();
+                    let mut expected: Option<u64> = None;
+                    for tok in line.split('\t') {
+                        let tok = tok.trim();
+                        if let Some(rest) = tok.strip_prefix("H ") { expected = rest.parse::<u64>().ok(); }
+                        else if let Some(rest) = tok.strip_prefix("K ") { for k in rest.split('|') { if !k.is_empty() { rs.keys.insert(k.to_string(), true); } } }
+                        else if let Some(rest) = tok.strip_prefix("B ") { for b in rest.split('|') { if !b.is_empty() { rs.mouse_buttons.insert(b.to_string(), true); } } }
+                        else if let Some(rest) = tok.strip_prefix("MX ") { rs.mouse_x = rest.parse::<f64>().unwrap_or(0.0); }
+                        else if let Some(rest) = tok.strip_prefix("MY ") { rs.mouse_y = rest.parse::<f64>().unwrap_or(0.0); }
+                    }
+                    if let Ok(mut cur) = replay_snapshot_set.lock() { *cur = rs; }
+                    if let Some(exp) = expected { if exp != h64 { tracing::error!("Determinism mismatch: expected={}, got={}", exp, h64); } }
+                }
+            }
         });
     }
 

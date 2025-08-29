@@ -115,7 +115,8 @@ pub struct EngineApi {
     next_texture_id: u32,
     fixed_time: Rc<RefCell<f64>>, // shared with time() closure
     persistence_store: Rc<RefCell<HashMap<String, Value>>>,
-    #[allow(dead_code)] // TODO: will be used for capability queries
+    rng_state: Rc<RefCell<u64>>, // deterministic RNG
+    #[allow(dead_code)] // TODO: will be used for capability queries  
     capabilities: EngineCapabilities,
 }
 
@@ -126,6 +127,7 @@ impl EngineApi {
             next_texture_id: 1,
             fixed_time: Rc::new(RefCell::new(0.0)),
             persistence_store: Rc::new(RefCell::new(HashMap::new())),
+            rng_state: Rc::new(RefCell::new(0x9E3779B97F4A7C15)),
             capabilities: EngineCapabilities::default(), // TODO: will be used for capability queries
         }
     }
@@ -298,6 +300,38 @@ impl EngineApi {
         if let Err(e) = engine_table.set("time", time_func) {
             return Err(anyhow::Error::msg(format!("Failed to set time: {}", e)));
         }
+
+        // Deterministic RNG: seed(n), random()
+        let rng_seed = self.rng_state.clone();
+        let seed_func = lua
+            .create_function(move |_, n: u64| {
+                *rng_seed.borrow_mut() = if n == 0 { 0x9E3779B97F4A7C15 } else { n };
+                Ok(())
+            })
+            .map_err(|e| anyhow::Error::msg(format!("Failed to create seed: {}", e)))?;
+        engine_table
+            .set("seed", seed_func)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to set seed: {}", e)))?;
+
+        let rng_state = self.rng_state.clone();
+        let rand_func = lua
+            .create_function(move |_, ()| {
+                // xorshift64*
+                let mut x = *rng_state.borrow();
+                if x == 0 { x = 0x9E3779B97F4A7C15; }
+                x ^= x >> 12;
+                x ^= x << 25;
+                x ^= x >> 27;
+                let result = x.wrapping_mul(0x2545F4914F6CDD1D);
+                *rng_state.borrow_mut() = x;
+                // map to [0,1)
+                let val = (result >> 11) as f64 / (1u64 << 53) as f64;
+                Ok(val)
+            })
+            .map_err(|e| anyhow::Error::msg(format!("Failed to create random: {}", e)))?;
+        engine_table
+            .set("random", rand_func)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to set random: {}", e)))?;
 
         // Persistence system
         let store_ref = self.persistence_store.clone();

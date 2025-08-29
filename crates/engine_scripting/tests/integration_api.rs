@@ -134,6 +134,28 @@ fn metrics_provider_roundtrip() {
 }
 
 #[test]
+fn rng_seed_is_deterministic() {
+    let lua = Lua::new();
+    let api = EngineApi::new();
+    api.setup_engine_namespace(&lua).unwrap();
+
+    let script = r#"
+        function seq()
+            engine.seed(42)
+            local a = engine.random()
+            local b = engine.random()
+            return a, b
+        end
+    "#;
+    lua.load(script).exec().unwrap();
+    let globals = lua.globals();
+    let f: mlua::Function = globals.get("seq").unwrap();
+    let (a1,b1): (f64,f64) = f.call::<(f64,f64)>(()).unwrap();
+    let (a2,b2): (f64,f64) = f.call::<(f64,f64)>(()).unwrap();
+    assert!((a1-a2).abs() < 1e-12 && (b1-b2).abs() < 1e-12);
+}
+
+#[test]
 fn persistence_roundtrip_lua() {
     let lua = Lua::new();
     let api = EngineApi::new();

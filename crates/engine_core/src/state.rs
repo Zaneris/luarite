@@ -209,6 +209,22 @@ impl EngineState {
     pub fn window_size(&self) -> (u32, u32) {
         (self.window_width, self.window_height)
     }
+
+    // Determinism: compute a stable hash of the transform buffer
+    pub fn compute_transform_hash(&self) -> u64 {
+        // FNV-1a 64-bit over f64 bit patterns
+        let mut hash: u64 = 0xcbf29ce484222325;
+        let prime: u64 = 0x100000001b3;
+        for v in &self.transform_buffer {
+            let bits = v.to_bits();
+            let b = bits.to_le_bytes();
+            for byte in b {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(prime);
+            }
+        }
+        hash
+    }
 }
 
 impl Default for EngineState {

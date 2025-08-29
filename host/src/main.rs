@@ -282,12 +282,15 @@ fn main() -> Result<()> {
                     ex.transforms_dirty = false;
                 }
                 // Prefer zero-copy typed sprites swap if present
-                if let Some((rcvec, rows, cap)) = ex.typed_sprites.take() {
+                if let Some((rcvec, rows, _cap)) = ex.typed_sprites.take() {
                     if !ex.drained_sprites_this_frame {
-                        let mut v = rcvec.borrow_mut();
-                        state.swap_sprites_with_len(&mut v, rows);
-                        // Ensure script buffer length is at least cap again (preserve row contents)
-                        if v.len() < cap { v.resize(cap, SpriteData { entity_id: 0, texture_id: 0, uv: [0.0;4], color: [0.0;4] }); }
+                        // Copy rows from the typed buffer into engine state to preserve the script buffer contents
+                        let v = rcvec.borrow();
+                        sprites_scratch.clear();
+                        sprites_scratch.extend_from_slice(&v[..rows]);
+                        if let Err(e) = state.append_sprites(&mut sprites_scratch) {
+                            tracing::error!("Failed to submit typed sprites: {}", e);
+                        }
                         ex.drained_sprites_this_frame = true;
                     }
                 } else if !ex.sprites.is_empty() {

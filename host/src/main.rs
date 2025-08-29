@@ -36,12 +36,19 @@ fn main() -> Result<()> {
     struct ScriptExchange {
         transforms: Vec<f64>,         // v2 flat array (scratch, reused)
         transforms_dirty: bool,
+        transforms_f32: Vec<f32>,     // retained legacy typed path (not used by swap path)
+        transforms_f32_dirty: bool,
+        typed_buf: Option<(std::rc::Rc<std::cell::RefCell<Vec<f32>>>, usize, usize)>, // (rc buf, rows, cap)
+        typed_sprites: Option<(std::rc::Rc<std::cell::RefCell<Vec<engine_core::state::SpriteData>>>, usize, usize)>,
         sprites: Vec<SpriteV2>,       // parsed sprites
         textures: Vec<(u32, String)>, // queued texture loads (id, path)
+        // Per-frame drain latches to avoid double-updates within the same frame
+        drained_tf32_this_frame: bool,
+        drained_sprites_this_frame: bool,
     }
     impl Default for ScriptExchange {
         fn default() -> Self {
-            Self { transforms: Vec::with_capacity(1024), transforms_dirty: false, sprites: Vec::with_capacity(1024), textures: Vec::new() }
+            Self { transforms: Vec::with_capacity(1024), transforms_dirty: false, transforms_f32: Vec::with_capacity(1024), transforms_f32_dirty: false, typed_buf: None, typed_sprites: None, sprites: Vec::with_capacity(1024), textures: Vec::new(), drained_tf32_this_frame: false, drained_sprites_this_frame: false }
         }
     }
     let exchange = Arc::new(Mutex::new(ScriptExchange::default()));
@@ -81,6 +88,20 @@ fn main() -> Result<()> {
             if let Ok(mut ex) = ex2.lock() {
                 ex.sprites.clear();
                 ex.sprites.extend_from_slice(sprites);
+            }
+        });
+        // Typed sprites path: pass engine-owned vec Rc and rows
+        let ex_sb = exchange.clone();
+        let submit_sprites_typed_cb: Rc<dyn Fn(std::rc::Rc<std::cell::RefCell<Vec<SpriteData>>>, usize, usize)> = Rc::new(move |rcvec, rows, cap| {
+            if let Ok(mut ex) = ex_sb.lock() {
+                ex.typed_sprites = Some((rcvec.clone(), rows, cap));
+            }
+        });
+        // Typed buffer f32 path: pass engine-owned buffer Rc and row/cap counts
+        let ex_tf32 = exchange.clone();
+        let set_transforms_f32_cb = Rc::new(move |rcbuf: std::rc::Rc<std::cell::RefCell<Vec<f32>>>, rows: usize, cap: usize| {
+            if let Ok(mut ex) = ex_tf32.lock() {
+                ex.typed_buf = Some((rcbuf.clone(), rows, cap));
             }
         });
         // Queue texture loads from Lua
@@ -134,7 +155,9 @@ fn main() -> Result<()> {
         api.setup_engine_namespace_with_sinks_and_metrics(
             sandbox.lua(),
             set_transforms_cb,
+            Some(set_transforms_f32_cb),
             submit_sprites_cb,
+            Some(submit_sprites_typed_cb),
             hud_provider,
             load_texture_cb,
             input_provider,
@@ -237,13 +260,38 @@ fn main() -> Result<()> {
                         }
                     }
                 }
-                if ex.transforms_dirty {
+                // Prefer zero-copy typed buffer swap if present
+                if let Some((rcbuf, rows, cap)) = ex.typed_buf.take() {
+                    if !ex.drained_tf32_this_frame {
+                        let mut v = rcbuf.borrow_mut();
+                        // Swap script buffer vec into engine state and truncate to active elems
+                        state.swap_transform_buffer_with_len(&mut v, rows * 6);
+                        // Ensure script buffer length is at least cap again (preserve contents)
+                        v.resize(cap * 6, 0.0);
+                        ex.drained_tf32_this_frame = true;
+                    }
+                } else if ex.transforms_f32_dirty {
+                    if let Err(e) = state.set_transforms_from_f32_slice(&ex.transforms_f32) {
+                        tracing::error!("Failed to set transforms (f32): {}", e);
+                    }
+                    ex.transforms_f32_dirty = false;
+                } else if ex.transforms_dirty {
                     if let Err(e) = state.set_transforms_from_slice(&ex.transforms) {
                         tracing::error!("Failed to set transforms: {}", e);
                     }
                     ex.transforms_dirty = false;
                 }
-                if !ex.sprites.is_empty() {
+                // Prefer zero-copy typed sprites swap if present
+                if let Some((rcvec, rows, cap)) = ex.typed_sprites.take() {
+                    if !ex.drained_sprites_this_frame {
+                        let mut v = rcvec.borrow_mut();
+                        state.swap_sprites_with_len(&mut v, rows);
+                        // Ensure script buffer length is at least cap again (preserve row contents)
+                        if v.len() < cap { v.resize(cap, SpriteData { entity_id: 0, texture_id: 0, uv: [0.0;4], color: [0.0;4] }); }
+                        ex.drained_sprites_this_frame = true;
+                    }
+                } else if !ex.sprites.is_empty() {
+                    // Fallback: parsed v2 sprites
                     sprites_scratch.clear();
                     sprites_scratch.reserve(ex.sprites.len());
                     for s in ex.sprites.drain(..) {
@@ -264,6 +312,8 @@ fn main() -> Result<()> {
         let last_used_for_write = last_used_input_global.clone();
         // Replay snapshot handle for this closure
         let replay_snapshot_set = replay_snapshot_global.clone();
+        // Exchange for resetting per-frame drain flags
+        let exchange_reset = exchange.clone();
         // Optional record/replay handles
         let mut rec_file = match record_path.clone() {
             Some(p) => Some(std::fs::File::create(p).expect("create record file")),
@@ -321,6 +371,12 @@ fn main() -> Result<()> {
                     if let Ok(mut cur) = replay_snapshot_set.lock() { *cur = rs; }
                     if let Some(exp) = expected { if exp != h64 { tracing::error!("Determinism mismatch: expected={}, got={}", exp, h64); } }
                 }
+            }
+
+            // Reset per-frame drain latches so next frame will drain once again
+            if let Ok(mut ex) = exchange_reset.lock() {
+                ex.drained_tf32_this_frame = false;
+                ex.drained_sprites_this_frame = false;
             }
         });
     }

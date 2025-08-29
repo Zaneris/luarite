@@ -123,7 +123,6 @@ end
 - sprite (atlas): `fb:sprite_named(i, entity, atlas, name, r, g, b, a)`
 - sprite_color: `fb:sprite_color(i, r, g, b, a)`
 - commit: `fb:commit()`
-```
 
 ### Performance Tips
 - Reuse `transforms` and `sprites` tables; overwrite in place.

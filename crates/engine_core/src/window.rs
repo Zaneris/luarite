@@ -185,9 +185,9 @@ impl ApplicationHandler for EngineWindow {
                     }
                 }
 
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
             }
             _ => {}
         }
@@ -301,9 +301,6 @@ impl ApplicationHandler for EngineWindow {
             }
         }
 
-        // Request redraw
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        // Note: we schedule continuous redraws from RedrawRequested handler only
     }
 }

@@ -14,7 +14,7 @@ pub struct SpriteVertex {
 }
 
 impl SpriteVertex {
-    fn desc() -> wgpu::VertexBufferLayout<'static> {
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<SpriteVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,

@@ -19,9 +19,11 @@ fn frame_builder_commit_hits_sinks() {
             Rc::new(move |slice| {
                 *st_cap.borrow_mut() = Some(slice.to_vec());
             }),
+            None,
             Rc::new(move |sprites| {
                 *sp_cap.borrow_mut() = sprites.to_vec();
             }),
+            None,
             Rc::new(|| (0.0, 0, 0)),
             Rc::new(|_, _| {}),
             Rc::new(|| InputSnapshot::default()),
@@ -64,9 +66,11 @@ fn frame_builder_transform_and_color() {
         .setup_engine_namespace_with_sinks_and_metrics(
             &lua,
             Rc::new(|_| {}),
-            Rc::new(move |sprites| {
+            None,
+            Rc::new(move |sprites: &[SpriteV2]| {
                 *cap2.borrow_mut() = sprites.to_vec();
             }),
+            None,
             Rc::new(|| (0.0, 0, 0)),
             Rc::new(|_, _| {}),
             Rc::new(|| InputSnapshot::default()),
@@ -105,7 +109,9 @@ fn hud_printf_callable() {
         .setup_engine_namespace_with_sinks_and_metrics(
             &lua,
             Rc::new(|_| {}),
+            None,
             Rc::new(|_| {}),
+            None,
             Rc::new(|| (0.0, 0, 0)),
             Rc::new(|_, _| {}),
             Rc::new(|| InputSnapshot::default()),

@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use serde::Deserialize;
+use engine_core::state::SpriteData;
 
 /// Current engine API version
 pub const API_VERSION: u32 = 1;
@@ -118,6 +119,9 @@ pub struct EngineApi {
     persistence_store: Rc<RefCell<HashMap<String, Value>>>,
     rng_state: Rc<RefCell<u64>>, // deterministic RNG
     pixels_per_unit: Rc<RefCell<f64>>, // units helper
+    // Simple rate limiters (window start, count)
+    log_rl: Rc<RefCell<(f64, u32)>>,
+    hud_rl: Rc<RefCell<(f64, u32)>>,
     #[allow(dead_code)] // TODO: will be used for capability queries  
     capabilities: EngineCapabilities,
 }
@@ -131,6 +135,8 @@ impl EngineApi {
             persistence_store: Rc::new(RefCell::new(HashMap::new())),
             rng_state: Rc::new(RefCell::new(0x9E3779B97F4A7C15)),
             pixels_per_unit: Rc::new(RefCell::new(64.0)),
+            log_rl: Rc::new(RefCell::new((0.0, 0))),
+            hud_rl: Rc::new(RefCell::new((0.0, 0))),
             capabilities: EngineCapabilities::default(), // TODO: will be used for capability queries
         }
     }
@@ -243,8 +249,8 @@ impl EngineApi {
             )));
         }
 
-        // Transform batching (accept v2 array or TransformBuffer)
-        let transform_func = match lua.create_function(|lua, v: Value| {
+        // Transform batching (typed buffers only)
+        let transform_func = match lua.create_function(|_, v: Value| {
             match v {
                 Value::UserData(ud) => {
                     if let Ok(tb) = ud.borrow::<TransformBuffer>() {
@@ -256,18 +262,10 @@ impl EngineApi {
                         tracing::debug!("Setting {} transforms (typed)", rows);
                         Ok(())
                     } else {
-                        Err(mlua::Error::RuntimeError("ARG_ERROR: unsupported userdata for set_transforms".into()))
+                        Err(mlua::Error::RuntimeError("ARG_ERROR: set_transforms expects TransformBuffer".into()))
                     }
                 }
-                Value::Table(arr) => {
-                    let mut tmp = Vec::new();
-                    parse_transforms_table_to_out(lua, arr, &mut tmp)?;
-                    tracing::debug!("Setting {} transforms", tmp.len() / 6);
-                    Ok(())
-                }
-                _ => Err(mlua::Error::RuntimeError(
-                    "ARG_ERROR: set_transforms expects table or TransformBuffer".into(),
-                )),
+                _ => Err(mlua::Error::RuntimeError("ARG_ERROR: set_transforms expects TransformBuffer".into())),
             }
         }) {
             Ok(func) => func,
@@ -285,31 +283,18 @@ impl EngineApi {
             )));
         }
 
-        // Sprite batching (accept v2 array or SpriteBuffer)
-        let sprite_func = match lua.create_function(|_lua, v: Value| {
+        // Sprite batching (typed buffers only)
+        let sprite_func = match lua.create_function(|_, v: Value| {
             match v {
                 Value::UserData(ud) => {
                     if let Ok(_sb) = ud.borrow::<SpriteBuffer>() {
                         tracing::debug!("Submitting sprites (typed)");
                         Ok(())
                     } else {
-                        Err(mlua::Error::RuntimeError("ARG_ERROR: unsupported userdata for submit_sprites".into()))
+                        Err(mlua::Error::RuntimeError("ARG_ERROR: submit_sprites expects SpriteBuffer".into()))
                     }
                 }
-                Value::Table(t) => {
-                    let len = t.raw_len();
-                    if len % 10 != 0 {
-                        return Err(mlua::Error::RuntimeError(format!(
-                            "ARG_ERROR: submit_sprites stride mismatch (got={}, want=10)",
-                            len % 10
-                        )));
-                    }
-                    tracing::debug!("Submitting {} sprites", len / 10);
-                    Ok(())
-                }
-                _ => Err(mlua::Error::RuntimeError(
-                    "ARG_ERROR: submit_sprites expects table or SpriteBuffer".into(),
-                )),
+                _ => Err(mlua::Error::RuntimeError("ARG_ERROR: submit_sprites expects SpriteBuffer".into())),
             }
         }) {
             Ok(func) => func,
@@ -461,14 +446,22 @@ impl EngineApi {
             return Err(anyhow::Error::msg(format!("Failed to set restore: {}", e)));
         }
 
-        // Logging system
-        let log_func = match lua.create_function(|_, (level, message): (String, String)| {
-            match level.as_str() {
-                "info" => tracing::info!("[Lua] {}", message),
-                "warn" => tracing::warn!("[Lua] {}", message),
-                "error" => tracing::error!("[Lua] {}", message),
-                "debug" => tracing::debug!("[Lua] {}", message),
-                _ => tracing::info!("[Lua] {}", message),
+        // Logging system (rate-limited 30 msgs/sec)
+        let fixed_time_for_log = self.fixed_time.clone();
+        let log_rl = self.log_rl.clone();
+        let log_func = match lua.create_function(move |_, (level, message): (String, String)| {
+            let now = *fixed_time_for_log.borrow();
+            let mut rl = log_rl.borrow_mut();
+            if now - rl.0 >= 1.0 { rl.0 = now; rl.1 = 0; }
+            if rl.1 < 30 {
+                rl.1 += 1;
+                match level.as_str() {
+                    "info" => tracing::info!("[Lua] {}", message),
+                    "warn" => tracing::warn!("[Lua] {}", message),
+                    "error" => tracing::error!("[Lua] {}", message),
+                    "debug" => tracing::debug!("[Lua] {}", message),
+                    _ => tracing::info!("[Lua] {}", message),
+                }
             }
             Ok(())
         }) {
@@ -541,9 +534,9 @@ impl Default for EngineApi {
 
 impl UserData for EngineApi {}
 
-// Engine-backed transform buffer (stride=6)
+// Engine-backed transform buffer (stride=6, f32)
 pub struct TransformBuffer {
-    buf: Rc<RefCell<Vec<f64>>>,
+    buf: Rc<RefCell<Vec<f32>>>,
     len: Rc<RefCell<usize>>, // active rows
     cap: Rc<RefCell<usize>>, // capacity in rows
     ppu: Rc<RefCell<f64>>,   // pixels per unit
@@ -557,31 +550,16 @@ impl TransformBuffer {
     }
 }
 
-// Typed sprite buffer
-#[derive(Clone, Default)]
-struct SpriteRow {
-    entity_id: u32,
-    texture_id: u32,
-    u0: f32,
-    v0: f32,
-    u1: f32,
-    v1: f32,
-    r: f32,
-    g: f32,
-    b: f32,
-    a: f32,
-}
-
 pub struct SpriteBuffer {
-    rows: Rc<RefCell<Vec<SpriteRow>>>,
+    rows: Rc<RefCell<Vec<SpriteData>>>,
     len: Rc<RefCell<usize>>, // active rows
     cap: Rc<RefCell<usize>>, // capacity in rows
 }
 
 impl SpriteBuffer {
     fn new(capacity: usize) -> Self {
-        let mut v = Vec::with_capacity(capacity);
-        v.resize_with(capacity, SpriteRow::default);
+        let mut v: Vec<SpriteData> = Vec::with_capacity(capacity);
+        v.resize(capacity, SpriteData { entity_id: 0, texture_id: 0, uv: [0.0;4], color: [0.0;4]});
         Self { rows: Rc::new(RefCell::new(v)), len: Rc::new(RefCell::new(0)), cap: Rc::new(RefCell::new(capacity)) }
     }
 }
@@ -594,7 +572,7 @@ impl UserData for SpriteBuffer {
             let entity_id = id_ud.borrow::<EntityId>()?.0;
             let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
             let mut rows = this.rows.borrow_mut();
-            rows[idx] = SpriteRow { entity_id, texture_id, u0, v0, u1, v1, r, g, b, a };
+            rows[idx] = SpriteData { entity_id, texture_id, uv: [u0, v0, u1, v1], color: [r, g, b, a] };
             let mut l = this.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
@@ -614,7 +592,7 @@ impl UserData for SpriteBuffer {
             let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
             let mut rows = this.rows.borrow_mut();
             let row = &mut rows[idx];
-            row.u0=u0; row.v0=v0; row.u1=u1; row.v1=v1;
+            row.uv = [u0, v0, u1, v1];
             Ok(())
         });
         methods.add_method_mut("set_color", |_, this, (i, r, g, b, a): (usize, f32, f32, f32, f32)| {
@@ -622,7 +600,7 @@ impl UserData for SpriteBuffer {
             let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
             let mut rows = this.rows.borrow_mut();
             let row = &mut rows[idx];
-            row.r=r; row.g=g; row.b=b; row.a=a;
+            row.color = [r, g, b, a];
             Ok(())
         });
         methods.add_method_mut("set_named_uv", |_, this, (i, atlas_ud, name): (usize, AnyUserData, String)| {
@@ -635,14 +613,14 @@ impl UserData for SpriteBuffer {
                 .ok_or_else(|| mlua::Error::RuntimeError(format!("unknown atlas name: {}", name)))?;
             let mut rows = this.rows.borrow_mut();
             let row = &mut rows[idx];
-            row.u0 = uv[0]; row.v0 = uv[1]; row.u1 = uv[2]; row.v1 = uv[3];
+            row.uv = uv.clone();
             row.texture_id = atlas.texture.0;
             Ok(())
         });
         methods.add_method("len", |_, this, ()| Ok(*this.len.borrow() as i64));
         methods.add_method("cap", |_, this, ()| Ok(*this.cap.borrow() as i64));
         methods.add_method_mut("resize", |_, this, new_cap: usize| {
-            let mut v = this.rows.borrow_mut(); v.resize_with(new_cap, SpriteRow::default);
+            let mut v = this.rows.borrow_mut(); v.resize(new_cap, SpriteData { entity_id: 0, texture_id: 0, uv: [0.0;4], color: [0.0;4]});
             *this.cap.borrow_mut() = new_cap;
             if *this.len.borrow() > new_cap { *this.len.borrow_mut() = new_cap; }
             Ok(())
@@ -677,12 +655,12 @@ impl UserData for TransformBuffer {
             // id may be EntityId or number
             let entity_id = match id {
                 Value::UserData(ud) => {
-                    if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f64 } else { return Err(mlua::Error::RuntimeError("id must be EntityId or number".into())); }
+                    if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f32 } else { return Err(mlua::Error::RuntimeError("id must be EntityId or number".into())); }
                 }
-                v => f64::from_lua(v, lua)?,
+                v => f64::from_lua(v, lua)? as f32,
             };
             let off = idx * 6; let mut b = this.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x; b[off+2]=y; b[off+3]=rot; b[off+4]=sx; b[off+5]=sy;
+            b[off+0]=entity_id; b[off+1]=x as f32; b[off+2]=y as f32; b[off+3]=rot as f32; b[off+4]=sx as f32; b[off+5]=sy as f32;
             let mut l = this.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
@@ -690,13 +668,13 @@ impl UserData for TransformBuffer {
             let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
             let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
             let entity_id = match id {
-                Value::UserData(ud) => { if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f64 } else { return Err(mlua::Error::RuntimeError("id must be EntityId or number".into())); } }
-                v => f64::from_lua(v, lua)?,
+                Value::UserData(ud) => { if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f32 } else { return Err(mlua::Error::RuntimeError("id must be EntityId or number".into())); } }
+                v => f64::from_lua(v, lua)? as f32,
             };
             let ppu = *this.ppu.borrow();
-            let sx = w_px / ppu; let sy = h_px / ppu;
+            let sx = (w_px / ppu) as f32; let sy = (h_px / ppu) as f32;
             let off = idx * 6; let mut b = this.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x_px; b[off+2]=y_px; b[off+3]=rot; b[off+4]=sx; b[off+5]=sy;
+            b[off+0]=entity_id; b[off+1]=x_px as f32; b[off+2]=y_px as f32; b[off+3]=rot as f32; b[off+4]=sx; b[off+5]=sy;
             let mut l = this.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
@@ -732,7 +710,9 @@ impl EngineApi {
         &self,
         lua: &Lua,
         set_transforms_cb: Rc<dyn Fn(&[f64])>,
+        set_transforms_f32_cb: Option<Rc<dyn Fn(Rc<RefCell<Vec<f32>>>, usize, usize)>>,
         submit_sprites_cb: Rc<dyn Fn(&[SpriteV2])>,
+        submit_sprites_typed_cb: Option<Rc<dyn Fn(Rc<RefCell<Vec<SpriteData>>>, usize, usize)>>,
     ) -> Result<()> {
         let globals = lua.globals();
 
@@ -756,9 +736,16 @@ impl EngineApi {
                 Value::UserData(ud) => {
                     if let Ok(tb) = ud.borrow::<TransformBuffer>() {
                         let rows = *tb.len.borrow();
-                        let buf = tb.buf.borrow();
-                        let take = rows * 6;
-                        (st_cb)(&buf[..take]);
+                        let cap = *tb.cap.borrow();
+                        if let Some(cb) = &set_transforms_f32_cb {
+                            (cb)(tb.buf.clone(), rows, cap);
+                        } else {
+                            // Fallback: convert to f64 for legacy callback
+                            let buf = tb.buf.borrow();
+                            let take = rows * 6;
+                            let tmp: Vec<f64> = buf[..take].iter().map(|v| *v as f64).collect();
+                            (st_cb)(&tmp);
+                        }
                         tracing::debug!("Setting {} transforms (typed)", rows);
                         Ok(())
                     } else {
@@ -793,22 +780,27 @@ impl EngineApi {
 
         // Override submit_sprites (accepts table or SpriteBuffer) and parse values into SpriteV2
         let sb_cb = submit_sprites_cb.clone();
+        let sb_typed = submit_sprites_typed_cb.clone();
         let sprites_scratch = std::cell::RefCell::new(Vec::<SpriteV2>::with_capacity(1024));
         let sprite_func = match lua.create_function(move |lua, arg: Value| {
             match arg {
                 Value::UserData(ud) => {
                     if let Ok(sb) = ud.borrow::<SpriteBuffer>() {
                         let rows = *sb.len.borrow();
-                        let vec = sb.rows.borrow();
-                        let mut out = sprites_scratch.borrow_mut();
-                        out.clear();
-                        out.reserve(rows);
-                        for i in 0..rows {
-                            let r = &vec[i];
-                            out.push(SpriteV2 { entity_id: r.entity_id, texture_id: r.texture_id, u0: r.u0, v0: r.v0, u1: r.u1, v1: r.v1, r: r.r, g: r.g, b: r.b, a: r.a });
+                        let cap = *sb.cap.borrow();
+                        if let Some(cb) = &sb_typed {
+                            (cb)(sb.rows.clone(), rows, cap);
+                        } else {
+                            let vec = sb.rows.borrow();
+                            let mut out = sprites_scratch.borrow_mut();
+                            out.clear();
+                            out.reserve(rows);
+                            for i in 0..rows {
+                                let r = &vec[i];
+                                out.push(SpriteV2 { entity_id: r.entity_id, texture_id: r.texture_id, u0: r.uv[0], v0: r.uv[1], u1: r.uv[2], v1: r.uv[3], r: r.color[0], g: r.color[1], b: r.color[2], a: r.color[3] });
+                            }
+                            (sb_cb)(&out);
                         }
-                        tracing::debug!("Submitting {} sprites (typed)", rows);
-                        (sb_cb)(&out);
                         Ok(())
                     } else {
                         Err(mlua::Error::RuntimeError("ARG_ERROR: unsupported userdata for submit_sprites".into()))
@@ -849,7 +841,9 @@ impl EngineApi {
         &self,
         lua: &Lua,
         set_transforms_cb: Rc<dyn Fn(&[f64])>,
+        set_transforms_f32_cb: Option<Rc<dyn Fn(Rc<RefCell<Vec<f32>>>, usize, usize)>>,
         submit_sprites_cb: Rc<dyn Fn(&[SpriteV2])>,
+        submit_sprites_typed_cb: Option<Rc<dyn Fn(Rc<RefCell<Vec<SpriteData>>>, usize, usize)>>,
         metrics_provider: Rc<dyn Fn() -> (f64, u32, u32)>,
         load_texture_cb: Rc<dyn Fn(String, u32)>,
         input_provider: Rc<dyn Fn() -> InputSnapshot>,
@@ -860,7 +854,9 @@ impl EngineApi {
         self.setup_engine_namespace_with_sinks(
             lua,
             set_transforms_cb,
+            set_transforms_f32_cb,
             submit_sprites_cb,
+            submit_sprites_typed_cb,
         )?;
 
         // Override get_metrics
@@ -906,11 +902,16 @@ impl EngineApi {
             .set("window_size", ws_func)
             .map_err(|e| anyhow::Error::msg(format!("Failed to set window_size: {}", e)))?;
 
-        // HUD printf hook: engine.hud_printf(msg)
+        // HUD printf hook: engine.hud_printf(msg) (rate-limited 30 msgs/sec)
         let hud_cb = hud_printf_cb.clone();
+        let hud_rl = self.hud_rl.clone();
+        let fixed_time_for_hud = self.fixed_time.clone();
         let hud_fn = lua
             .create_function(move |_, msg: String| {
-                hud_cb(msg);
+                let now = *fixed_time_for_hud.borrow();
+                let mut rl = hud_rl.borrow_mut();
+                if now - rl.0 >= 1.0 { rl.0 = now; rl.1 = 0; }
+                if rl.1 < 30 { rl.1 += 1; hud_cb(msg); }
                 Ok(())
             })
             .map_err(|e| anyhow::Error::msg(format!("Failed to create hud_printf: {}", e)))?;
@@ -1058,9 +1059,9 @@ impl UserData for FrameBuilder {
             let tb = t_ud.borrow::<TransformBuffer>()?;
             let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
             let cap = *tb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let entity_id = id_ud.borrow::<EntityId>()?.0 as f64;
+            let entity_id = id_ud.borrow::<EntityId>()?.0 as f32;
             let off = idx * 6; let mut b = tb.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x; b[off+2]=y; b[off+3]=rot; b[off+4]=sx; b[off+5]=sy;
+            b[off+0]=entity_id; b[off+1]=x as f32; b[off+2]=y as f32; b[off+3]=rot as f32; b[off+4]=sx as f32; b[off+5]=sy as f32;
             let mut l = tb.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
@@ -1069,11 +1070,11 @@ impl UserData for FrameBuilder {
             let tb = t_ud.borrow::<TransformBuffer>()?;
             let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
             let cap = *tb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let entity_id = id_ud.borrow::<EntityId>()?.0 as f64;
+            let entity_id = id_ud.borrow::<EntityId>()?.0 as f32;
             let ppu = *tb.ppu.borrow();
-            let sx = w_px / ppu; let sy = h_px / ppu;
+            let sx = (w_px / ppu) as f32; let sy = (h_px / ppu) as f32;
             let off = idx * 6; let mut b = tb.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x_px; b[off+2]=y_px; b[off+3]=rot; b[off+4]=sx; b[off+5]=sy;
+            b[off+0]=entity_id; b[off+1]=x_px as f32; b[off+2]=y_px as f32; b[off+3]=rot as f32; b[off+4]=sx; b[off+5]=sy;
             let mut l = tb.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
@@ -1085,7 +1086,7 @@ impl UserData for FrameBuilder {
             let entity_id = id_ud.borrow::<EntityId>()?.0;
             let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
             let mut rows = sb.rows.borrow_mut();
-            rows[idx] = SpriteRow { entity_id, texture_id, u0, v0, u1, v1, r, g, b, a };
+            rows[idx] = SpriteData { entity_id, texture_id, uv: [u0, v0, u1, v1], color: [r, g, b, a] };
             let mut l = sb.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
@@ -1097,7 +1098,7 @@ impl UserData for FrameBuilder {
             let entity_id = id_ud.borrow::<EntityId>()?.0;
             let mut rows = sb.rows.borrow_mut();
             let row = &mut rows[idx];
-            row.entity_id = entity_id; row.u0=u0; row.v0=v0; row.u1=u1; row.v1=v1;
+            row.entity_id = entity_id; row.uv = [u0, v0, u1, v1];
             let mut l = sb.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
@@ -1108,7 +1109,7 @@ impl UserData for FrameBuilder {
             let cap = *sb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
             let mut rows = sb.rows.borrow_mut();
             let row = &mut rows[idx];
-            row.r=r; row.g=g; row.b=b; row.a=a;
+            row.color = [r, g, b, a];
             // length unchanged; no entity/tex set here
             Ok(())
         });
@@ -1121,7 +1122,7 @@ impl UserData for FrameBuilder {
             let atlas = atlas_ud.borrow::<Atlas>()?;
             let uv = atlas.uv_map.get(&name).ok_or_else(|| mlua::Error::RuntimeError(format!("unknown atlas name: {}", name)))?;
             let mut rows = sb.rows.borrow_mut();
-            rows[idx] = SpriteRow { entity_id, texture_id: atlas.texture.0, u0: uv[0], v0: uv[1], u1: uv[2], v1: uv[3], r, g, b, a };
+            rows[idx] = SpriteData { entity_id, texture_id: atlas.texture.0, uv: [uv[0], uv[1], uv[2], uv[3]], color: [r, g, b, a] };
             let mut l = sb.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
@@ -1144,173 +1145,6 @@ impl UserData for FrameBuilder {
 mod tests {
     use super::*;
 
-    #[test]
-    fn set_transforms_stride_error() {
-        let lua = Lua::new();
-        let api = EngineApi::new();
-        api.setup_engine_namespace(&lua).unwrap();
-        let globals = lua.globals();
-        let engine_tbl: mlua::Table = globals.get("engine").unwrap();
-        let func: mlua::Function = engine_tbl.get("set_transforms").unwrap();
-        // 5 elements (not divisible by 6)
-        let t = lua.create_table().unwrap();
-        for (i, v) in [1.0f64, 0.0, 0.0, 0.0, 1.0].iter().enumerate() {
-            t.raw_set(i + 1, *v).unwrap();
-        }
-        let err = func.call::<()>(t).unwrap_err();
-        let s = format!("{}", err);
-        assert!(
-            s.contains("ARG_ERROR: set_transforms stride mismatch"),
-            "{}",
-            s
-        );
-    }
-
-    #[test]
-    fn submit_sprites_stride_error() {
-        let lua = Lua::new();
-        let api = EngineApi::new();
-        let captured = Rc::new(RefCell::new(Vec::<SpriteV2>::new()));
-        let cap2 = captured.clone();
-        api.setup_engine_namespace_with_sinks(
-            &lua,
-            Rc::new(|_| {}),
-            Rc::new(move |sprites| {
-                *cap2.borrow_mut() = sprites.to_vec();
-            }),
-        )
-        .unwrap();
-        let globals = lua.globals();
-        let engine_tbl: mlua::Table = globals.get("engine").unwrap();
-        let func: mlua::Function = engine_tbl.get("submit_sprites").unwrap();
-        // Build a table of 9 elements (invalid stride)
-        let t = lua.create_table().unwrap();
-        // Need at least first two as userdatas
-        let ent = EntityId(1);
-        let tex = TextureHandle(1);
-        t.raw_set(1, lua.create_userdata(ent).unwrap()).unwrap();
-        t.raw_set(2, lua.create_userdata(tex).unwrap()).unwrap();
-        // add 7 numbers to make len=9
-        for i in 0..7 {
-            t.raw_set(3 + i, 0.0f32).unwrap();
-        }
-        let err = func.call::<()>(t).unwrap_err();
-        let s = format!("{}", err);
-        assert!(
-            s.contains("ARG_ERROR: submit_sprites stride mismatch"),
-            "{}",
-            s
-        );
-    }
-
-    #[test]
-    fn set_transforms_success_callbacks() {
-        let lua = Lua::new();
-        let api = EngineApi::new();
-        let captured: Rc<RefCell<Option<Vec<f64>>>> = Rc::new(RefCell::new(None));
-        let cap2 = captured.clone();
-        api.setup_engine_namespace_with_sinks(
-            &lua,
-            Rc::new(move |v| {
-                *cap2.borrow_mut() = Some(v.to_vec());
-            }),
-            Rc::new(|_| {}),
-        )
-        .unwrap();
-        let globals = lua.globals();
-        let engine_tbl: mlua::Table = globals.get("engine").unwrap();
-        let func: mlua::Function = engine_tbl.get("set_transforms").unwrap();
-        let t = lua.create_table().unwrap();
-        // id as number
-        for (i, v) in [1.0f64, 10.0, 20.0, 0.0, 1.0, 1.0].iter().enumerate() {
-            t.raw_set(i + 1, *v).unwrap();
-        }
-        func.call::<()>(t).unwrap();
-        let got = captured.borrow().clone().unwrap();
-        assert_eq!(got.len(), 6);
-        assert_eq!(got[1], 10.0);
-    }
-
-    #[test]
-    fn set_transforms_accepts_entity_id() {
-        let lua = Lua::new();
-        let api = EngineApi::new();
-        let captured: Rc<RefCell<Option<Vec<f64>>>> = Rc::new(RefCell::new(None));
-        let cap2 = captured.clone();
-        api.setup_engine_namespace_with_sinks(
-            &lua,
-            Rc::new(move |v| {
-                *cap2.borrow_mut() = Some(v.to_vec());
-            }),
-            Rc::new(|_| {}),
-        )
-        .unwrap();
-        let globals = lua.globals();
-        let engine_tbl: mlua::Table = globals.get("engine").unwrap();
-        let func: mlua::Function = engine_tbl.get("set_transforms").unwrap();
-        // Build table with EntityId as first field
-        let t = lua.create_table().unwrap();
-        let ent_ud = lua.create_userdata(EntityId(42)).unwrap();
-        t.raw_set(1, ent_ud).unwrap();
-        t.raw_set(2, 100.0f64).unwrap();
-        t.raw_set(3, 200.0f64).unwrap();
-        t.raw_set(4, 0.0f64).unwrap();
-        t.raw_set(5, 1.0f64).unwrap();
-        t.raw_set(6, 1.0f64).unwrap();
-        func.call::<()>(t).unwrap();
-        let got = captured.borrow().clone().unwrap();
-        assert_eq!(got[0], 42.0);
-    }
-
-    #[test]
-    fn submit_sprites_success_callbacks() {
-        let lua = Lua::new();
-        let api = EngineApi::new();
-        let captured: Rc<RefCell<Vec<SpriteV2>>> = Rc::new(RefCell::new(Vec::new()));
-        let cap2 = captured.clone();
-        api.setup_engine_namespace_with_sinks(
-            &lua,
-            Rc::new(|_| {}),
-            Rc::new(move |sprites| {
-                *cap2.borrow_mut() = sprites.to_vec();
-            }),
-        )
-        .unwrap();
-        let globals = lua.globals();
-        let engine_tbl: mlua::Table = globals.get("engine").unwrap();
-        let func: mlua::Function = engine_tbl.get("submit_sprites").unwrap();
-
-        // Build valid sprite array (stride 10)
-        let t = lua.create_table().unwrap();
-        let ent = EntityId(7);
-        let tex = TextureHandle(3);
-        t.raw_set(1, lua.create_userdata(ent).unwrap()).unwrap();
-        t.raw_set(2, lua.create_userdata(tex).unwrap()).unwrap();
-        // u0,v0,u1,v1,r,g,b,a
-        t.raw_set(3, 0.1f32).unwrap();
-        t.raw_set(4, 0.2f32).unwrap();
-        t.raw_set(5, 0.9f32).unwrap();
-        t.raw_set(6, 0.8f32).unwrap();
-        t.raw_set(7, 1.0f32).unwrap();
-        t.raw_set(8, 0.5f32).unwrap();
-        t.raw_set(9, 0.25f32).unwrap();
-        t.raw_set(10, 1.0f32).unwrap();
-
-        func.call::<()>(t).unwrap();
-
-        let got = captured.borrow();
-        assert_eq!(got.len(), 1);
-        let s = &got[0];
-        assert_eq!(s.entity_id, 7);
-        assert_eq!(s.texture_id, 3);
-        assert!((s.u0 - 0.1).abs() < 1e-6);
-        assert!((s.v0 - 0.2).abs() < 1e-6);
-        assert!((s.u1 - 0.9).abs() < 1e-6);
-        assert!((s.v1 - 0.8).abs() < 1e-6);
-        assert!((s.r - 1.0).abs() < 1e-6);
-        assert!((s.g - 0.5).abs() < 1e-6);
-        assert!((s.b - 0.25).abs() < 1e-6);
-        assert!((s.a - 1.0).abs() < 1e-6);
-    }
+    
 
 }

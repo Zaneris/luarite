@@ -24,9 +24,11 @@ fn sinks_integration_end_to_end() {
         Rc::new(move |slice| {
             *st_cap.borrow_mut() = Some(slice.to_vec());
         }),
+        None,
         Rc::new(move |sprites| {
             *sp_cap.borrow_mut() = sprites.to_vec();
         }),
+        None,
         metrics,
         Rc::new(move |path, id| tex_ev2.borrow_mut().push((path, id))),
         Rc::new(|| InputSnapshot::default()),
@@ -79,7 +81,9 @@ fn input_provider_is_accessible_from_lua() {
     api.setup_engine_namespace_with_sinks_and_metrics(
         &lua,
         Rc::new(|_| {}),
+        None,
         Rc::new(|_| {}),
+        None,
         Rc::new(|| (0.0, 0, 0)),
         Rc::new(|_, _| {}),
         input_provider,
@@ -112,7 +116,9 @@ fn metrics_provider_roundtrip() {
     api.setup_engine_namespace_with_sinks_and_metrics(
         &lua,
         Rc::new(|_| {}),
+        None,
         Rc::new(|_| {}),
+        None,
         metrics,
         Rc::new(|_, _| {}),
         Rc::new(|| InputSnapshot::default()),

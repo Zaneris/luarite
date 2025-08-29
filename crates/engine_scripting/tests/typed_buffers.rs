@@ -18,7 +18,9 @@ fn typed_transform_buffer_hits_sink() {
             Rc::new(move |slice| {
                 *cap2.borrow_mut() = Some(slice.to_vec());
             }),
+            None,
             Rc::new(|_| {}),
+            None,
         )
         .unwrap();
 
@@ -48,7 +50,9 @@ fn transform_buffer_set_px_converts_units() {
             Rc::new(move |slice| {
                 *cap2.borrow_mut() = Some(slice.to_vec());
             }),
+            None,
             Rc::new(|_| {}),
+            None,
         )
         .unwrap();
 
@@ -77,9 +81,11 @@ fn typed_sprite_buffer_hits_sink() {
         .setup_engine_namespace_with_sinks_and_metrics(
             &lua,
             Rc::new(|_| {}),
+            None,
             Rc::new(move |sprites| {
                 *cap2.borrow_mut() = sprites.to_vec();
             }),
+            None,
             Rc::new(|| (0.0, 0, 0)),
             Rc::new(|_, _| {}),
             Rc::new(|| InputSnapshot::default()),
@@ -113,7 +119,9 @@ fn atlas_load_parses_json() {
         .setup_engine_namespace_with_sinks_and_metrics(
             &lua,
             Rc::new(|_| {}),
+            None,
             Rc::new(|_| {}),
+            None,
             Rc::new(|| (0.0, 0, 0)),
             Rc::new(|_, _| {}),
             Rc::new(|| InputSnapshot::default()),

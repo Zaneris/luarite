@@ -42,21 +42,7 @@ impl LuaSandbox {
                 return Err(anyhow::Error::msg(format!("safe.set string failed: {}", e)));
             }
         }
-        // Limited debug.traceback
-        if let Ok(debug_tbl) = globals.get::<Table>("debug") {
-            if let Ok(tb) = debug_tbl.get::<Function>("traceback") {
-                let dbg = match self.lua.create_table() {
-                    Ok(t) => t,
-                    Err(e) => return Err(anyhow::Error::msg(format!("create_table failed: {}", e))),
-                };
-                if let Err(e) = dbg.set("traceback", tb) {
-                    return Err(anyhow::Error::msg(format!("dbg.set traceback failed: {}", e)));
-                }
-                if let Err(e) = safe.set("debug", dbg) {
-                    return Err(anyhow::Error::msg(format!("safe.set debug failed: {}", e)));
-                }
-            }
-        }
+        // Debug library is not exposed in the sandbox to reduce attack surface
 
         // Lock package system on globals (affects any accidental access)
         self.lock_package_system(&globals)?;

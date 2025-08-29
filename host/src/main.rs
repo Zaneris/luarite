@@ -96,14 +96,20 @@ fn main() -> Result<()> {
         let ex_sb = exchange.clone();
         let submit_sprites_typed_cb: Rc<dyn Fn(std::rc::Rc<std::cell::RefCell<Vec<SpriteData>>>, usize, usize)> = Rc::new(move |rcvec, rows, cap| {
             if let Ok(mut ex) = ex_sb.lock() {
-                ex.typed_sprites = Some((rcvec.clone(), rows, cap));
+                // Capture only the first submission per frame to avoid overwriting
+                if !ex.drained_sprites_this_frame && ex.typed_sprites.is_none() {
+                    ex.typed_sprites = Some((rcvec.clone(), rows, cap));
+                }
             }
         });
         // Typed buffer f32 path: pass engine-owned buffer Rc and row/cap counts
         let ex_tf32 = exchange.clone();
         let set_transforms_f32_cb = Rc::new(move |rcbuf: std::rc::Rc<std::cell::RefCell<Vec<f32>>>, rows: usize, cap: usize| {
             if let Ok(mut ex) = ex_tf32.lock() {
-                ex.typed_buf = Some((rcbuf.clone(), rows, cap));
+                // Capture only first per frame; later updates in same frame are ignored by host drain anyway
+                if !ex.drained_tf32_this_frame && ex.typed_buf.is_none() {
+                    ex.typed_buf = Some((rcbuf.clone(), rows, cap));
+                }
             }
         });
         // Queue texture loads from Lua
@@ -294,13 +300,11 @@ fn main() -> Result<()> {
                 // Prefer zero-copy typed sprites swap if present
                 if let Some((rcvec, rows, _cap)) = ex.typed_sprites.take() {
                     if !ex.drained_sprites_this_frame {
-                        // Copy rows from the typed buffer into engine state to preserve the script buffer contents
+                        // Copy path: preserve Lua buffer contents (no flicker)
                         let v = rcvec.borrow();
                         sprites_scratch.clear();
                         sprites_scratch.extend_from_slice(&v[..rows]);
-                        if let Err(e) = state.append_sprites(&mut sprites_scratch) {
-                            tracing::error!("Failed to submit typed sprites: {}", e);
-                        }
+                        let _ = state.append_sprites(&mut sprites_scratch);
                         ex.drained_sprites_this_frame = true;
                     }
                 } else if !ex.sprites.is_empty() {

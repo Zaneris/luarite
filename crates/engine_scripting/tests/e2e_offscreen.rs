@@ -32,10 +32,12 @@ fn lua_draws_magenta_quad_offscreen() {
     let sp_v2 = Rc::new(|_sprites: &[SpriteV2]| {});
     let sp_typed = Some(Rc::new({
         let state_ptr: *mut EngineState = &mut state;
-        move |rc: Rc<RefCell<Vec<engine_core::state::SpriteData>>>, rows: usize, _cap: usize| {
+        move |rc: Rc<RefCell<Vec<engine_core::state::SpriteData>>>, rows: usize, cap: usize| {
             let mut v = rc.borrow_mut();
             unsafe {
-                (*state_ptr).swap_sprites_with_len(&mut v, rows);
+                (*state_ptr).swap_typed_sprites_into_back(&mut v, rows);
+                (*state_ptr).promote_sprites_back_to_front();
+                (*state_ptr).restore_lua_sprite_vec(&mut v, cap);
             }
         }
     }) as Rc<dyn Fn(Rc<RefCell<Vec<engine_core::state::SpriteData>>>, usize, usize)>);

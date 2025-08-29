@@ -36,7 +36,7 @@ Demo: A simple Pong‑like script is provided in `scripts/game.lua` (controls: `
   - Typed buffers (preferred):
     - `local T = engine.create_transform_buffer(cap)` with `T:set(i, id, x, y, rot, sx, sy)` or `T:set_px(i, id, x_px, y_px, rot, w_px, h_px)`; submit via `engine.set_transforms(T)`.
     - `local S = engine.create_sprite_buffer(cap)` with `S:set(i, id, tex, u0, v0, u1, v1, r, g, b, a)`, `S:set_tex`, `S:set_uv_rect`, `S:set_color`, `S:set_named_uv(i, atlas, name)`; submit via `engine.submit_sprites(S)`.
-    - Optional builder: `local fb = engine.frame_builder(T, S)` then `fb:transform_px(...)`, `fb:sprite_tex(...)` or `fb:sprite_named(...)`, `fb:commit()`.
+    - Optional builder: `local fb = engine.frame_builder(T, S)` then `fb:transform(i, id, x,y,rot,sx,sy)`, `fb:transform_px(i, id, x_px,y_px,rot,w_px,h_px)`, `fb:sprite_uv(i, id, u0,v0,u1,v1)`, `fb:sprite_tex(i, id, tex, u0,v0,u1,v1, r,g,b,a)`, `fb:sprite_named(i, id, atlas, name, r,g,b,a)`, `fb:sprite_color(i, r,g,b,a)`, and finalize with `fb:commit()`.
   - Legacy v2 arrays: still supported for portability
     - `engine.set_transforms(arr)` stride=6: `id, x, y, rot, sx, sy`
     - `engine.submit_sprites(arr)` stride=10: `id, tex, u0, v0, u1, v1, r, g, b, a`
@@ -54,7 +54,7 @@ Demo: A simple Pong‑like script is provided in `scripts/game.lua` (controls: `
 ```lua
 assert(engine.api_version == 1)
 
-local T, S, e, tex
+local T, S, e, tex, fb
 
 function on_start()
   e = engine.create_entity()
@@ -63,16 +63,66 @@ function on_start()
   T = engine.create_transform_buffer(1)
   S = engine.create_sprite_buffer(1)
   T:set_px(1, e, 100, 100, 0.0, 64, 64)
-  local fb = engine.frame_builder(T, S)
+  fb = engine.frame_builder(T, S)
   fb:sprite_tex(1, e, tex, 0.0,0.0,1.0,1.0, 1.0,1.0,1.0,1.0)
 end
 
 function on_update(dt)
   -- move +Y each frame and submit once
-  T:set_px(1, e, 100, 100 + 60*dt, 0.0, 64, 64)
-  engine.set_transforms(T)
-  engine.submit_sprites(S)
+  fb:transform_px(1, e, 100, 100 + 60*dt, 0.0, 64, 64)
+  fb:commit()
 end
+
+### Atlas + Builder Example
+```lua
+assert(engine.api_version == 1)
+engine.units.set_pixels_per_unit(64)
+
+local e = engine.create_entity()
+local atlas = engine.atlas_load("assets/atlas.png", "assets/atlas.json")
+local tex = atlas and atlas:tex() or engine.load_texture("assets/atlas.png")
+
+local T = engine.create_transform_buffer(1)
+local S = engine.create_sprite_buffer(1)
+local fb = engine.frame_builder(T, S)
+
+function on_start()
+  fb:transform_px(1, e, 200, 120, 0.0, 64, 64)
+  if atlas then fb:sprite_named(1, e, atlas, "ball", 1,1,1,1) else fb:sprite_tex(1, e, tex, 0,0,1,1, 1,1,1,1) end
+end
+
+function on_update(dt)
+  fb:transform_px(1, e, 200 + math.sin(engine.time())*50, 120, 0.0, 64, 64)
+  fb:commit()
+end
+```
+
+## API Reference
+
+### TransformBuffer
+- create: `engine.create_transform_buffer(cap)`
+- set: `T:set(i, entity|id, x, y, rot, sx, sy)`
+- set_px: `T:set_px(i, entity|id, x_px, y_px, rot, w_px, h_px)`
+- info: `T:len()`, `T:cap()`, `T:resize(new_cap)`
+
+### SpriteBuffer
+- create: `engine.create_sprite_buffer(cap)`
+- set: `S:set(i, entity, tex, u0, v0, u1, v1, r, g, b, a)`
+- texture: `S:set_tex(i, entity, tex)`
+- UVs: `S:set_uv_rect(i, u0, v0, u1, v1)`
+- color: `S:set_color(i, r, g, b, a)`
+- atlas: `S:set_named_uv(i, atlas, name)`
+- info: `S:len()`, `S:cap()`, `S:resize(new_cap)`
+
+### FrameBuilder
+- create: `engine.frame_builder(T, S)`
+- transform: `fb:transform(i, entity, x, y, rot, sx, sy)`
+- transform_px: `fb:transform_px(i, entity, x_px, y_px, rot, w_px, h_px)`
+- sprite (UV): `fb:sprite_uv(i, entity, u0, v0, u1, v1)`
+- sprite (texture): `fb:sprite_tex(i, entity, tex, u0, v0, u1, v1, r, g, b, a)`
+- sprite (atlas): `fb:sprite_named(i, entity, atlas, name, r, g, b, a)`
+- sprite_color: `fb:sprite_color(i, r, g, b, a)`
+- commit: `fb:commit()`
 ```
 
 ### Performance Tips

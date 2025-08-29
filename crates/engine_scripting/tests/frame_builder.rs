@@ -55,6 +55,47 @@ fn frame_builder_commit_hits_sinks() {
 }
 
 #[test]
+fn frame_builder_transform_and_color() {
+    let lua = Lua::new();
+    let api = EngineApi::new();
+    let captured: Rc<RefCell<Vec<SpriteV2>>> = Rc::new(RefCell::new(Vec::new()));
+    let cap2 = captured.clone();
+    api
+        .setup_engine_namespace_with_sinks_and_metrics(
+            &lua,
+            Rc::new(|_| {}),
+            Rc::new(move |sprites| {
+                *cap2.borrow_mut() = sprites.to_vec();
+            }),
+            Rc::new(|| (0.0, 0, 0)),
+            Rc::new(|_, _| {}),
+            Rc::new(|| InputSnapshot::default()),
+            Rc::new(|| (800, 600)),
+            Rc::new(|_| {}),
+        )
+        .unwrap();
+
+    let script = r#"
+        engine.units.set_pixels_per_unit(64)
+        local T = engine.create_transform_buffer(1)
+        local S = engine.create_sprite_buffer(1)
+        local fb = engine.frame_builder(T, S)
+        local e = engine.create_entity()
+        local tex = engine.load_texture("dummy.png")
+        fb:transform(1, e, 1.0, 2.0, 0.0, 3.0, 4.0)
+        fb:sprite_tex(1, e, tex, 0.0,0.0,1.0,1.0, 0.1,0.2,0.3,0.4)
+        fb:sprite_color(1, 0.9,0.8,0.7,0.6)
+        fb:commit()
+    "#;
+    lua.load(script).exec().unwrap();
+
+    let sp = captured.borrow();
+    assert_eq!(sp.len(), 1);
+    assert!((sp[0].r - 0.9).abs() < 1e-6);
+    assert!((sp[0].g - 0.8).abs() < 1e-6);
+}
+
+#[test]
 fn hud_printf_callable() {
     let lua = Lua::new();
     let api = EngineApi::new();
@@ -77,4 +118,3 @@ fn hud_printf_callable() {
     assert_eq!(got.len(), 1);
     assert_eq!(got[0], "hello HUD");
 }
-

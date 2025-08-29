@@ -27,6 +27,7 @@ local hud_t = 0.0
 -- Typed buffers (capacity 3)
 local T = engine.create_transform_buffer(3)
 local S = engine.create_sprite_buffer(3)
+local fb
 
 local function reset_ball()
   bx, by = w*0.5, h*0.5
@@ -64,6 +65,7 @@ function on_start()
   S:set_tex(1, paddle_l, tex); S:set_color(1, 0.2,0.8,0.2,1.0); if atlas then S:set_named_uv(1, atlas, "paddle") else S:set_uv_rect(1, 0.0,0.0,1.0,1.0) end
   S:set_tex(2, paddle_r, tex); S:set_color(2, 0.2,0.2,0.8,1.0); if atlas then S:set_named_uv(2, atlas, "paddle") else S:set_uv_rect(2, 0.0,0.0,1.0,1.0) end
   S:set_tex(3, ball,     tex); S:set_color(3, 0.9,0.9,0.2,1.0); if atlas then S:set_named_uv(3, atlas, "ball")   else S:set_uv_rect(3, 0.0,0.0,1.0,1.0) end
+  fb = engine.frame_builder(T, S)
 end
 
 function on_update(dt)
@@ -90,13 +92,11 @@ function on_update(dt)
   if bx < -20 then score_r = score_r + 1; reset_ball()
   elseif bx > w + 20 then score_l = score_l + 1; reset_ball() end
 
-  -- Fill transform buffer in pixels (QoL!)
-  T:set_px(1, paddle_l, px_l, py_l, 0, PADDLE_W, PADDLE_H)
-  T:set_px(2, paddle_r, px_r, py_r, 0, PADDLE_W, PADDLE_H)
-  T:set_px(3, ball,     bx,   by,   0, BALL_SIZE, BALL_SIZE)
-
-  engine.set_transforms(T)
-  engine.submit_sprites(S)
+  -- Fill transforms via builder and commit once
+  fb:transform_px(1, paddle_l, px_l, py_l, 0, PADDLE_W, PADDLE_H)
+  fb:transform_px(2, paddle_r, px_r, py_r, 0, PADDLE_W, PADDLE_H)
+  fb:transform_px(3, ball,     bx,   by,   0, BALL_SIZE, BALL_SIZE)
+  fb:commit()
 
   hud_t = hud_t + dt
   if hud_t >= 1.0 then

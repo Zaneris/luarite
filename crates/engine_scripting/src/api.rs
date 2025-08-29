@@ -260,14 +260,9 @@ impl EngineApi {
                     }
                 }
                 Value::Table(arr) => {
-                    let len = arr.raw_len();
-                    if len % 6 != 0 {
-                        return Err(mlua::Error::RuntimeError(format!(
-                            "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)",
-                            len % 6
-                        )));
-                    }
-                    tracing::debug!("Setting {} transforms", len / 6);
+                    let mut tmp = Vec::new();
+                    parse_transforms_table_to_out(lua, arr, &mut tmp)?;
+                    tracing::debug!("Setting {} transforms", tmp.len() / 6);
                     Ok(())
                 }
                 _ => Err(mlua::Error::RuntimeError(
@@ -291,7 +286,7 @@ impl EngineApi {
         }
 
         // Sprite batching (accept v2 array or SpriteBuffer)
-        let sprite_func = match lua.create_function(|lua, v: Value| {
+        let sprite_func = match lua.create_function(|_lua, v: Value| {
             match v {
                 Value::UserData(ud) => {
                     if let Ok(_sb) = ud.borrow::<SpriteBuffer>() {
@@ -771,36 +766,9 @@ impl EngineApi {
                     }
                 }
                 Value::Table(arr) => {
-                    let len = arr.raw_len();
-                    if len % 6 != 0 {
-                        return Err(mlua::Error::RuntimeError(format!(
-                            "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)",
-                            len % 6
-                        )));
-                    }
                     let mut out = transforms_scratch.borrow_mut();
                     out.clear();
-                    out.reserve(len);
-                    let mut i = 1;
-                    while i <= len {
-                        // id can be EntityId userdata or a number
-                        let v: mlua::Value = arr.raw_get(i)?; i += 1;
-                        let id_num = match v {
-                            mlua::Value::UserData(ud) => {
-                                if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f64 } else {
-                                    return Err(mlua::Error::RuntimeError("ARG_ERROR: id must be EntityId or number".into()));
-                                }
-                            }
-                            _ => f64::from_lua(v, lua)?,
-                        };
-                        out.push(id_num);
-                        // x,y,rot,sx,sy numbers
-                        let x: f64 = arr.raw_get(i)?; i += 1; out.push(x);
-                        let y: f64 = arr.raw_get(i)?; i += 1; out.push(y);
-                        let rot: f64 = arr.raw_get(i)?; i += 1; out.push(rot);
-                        let sx: f64 = arr.raw_get(i)?; i += 1; out.push(sx);
-                        let sy: f64 = arr.raw_get(i)?; i += 1; out.push(sy);
-                    }
+                    parse_transforms_table_to_out(lua, arr, &mut out)?;
                     tracing::debug!("Setting {} transforms", out.len() / 6);
                     (st_cb)(&out);
                     Ok(())
@@ -847,38 +815,9 @@ impl EngineApi {
                     }
                 }
                 Value::Table(sprites) => {
-                    // Accept array table
-                    let len = sprites.raw_len();
-                    if len % 10 != 0 {
-                        return Err(mlua::Error::RuntimeError(format!(
-                            "ARG_ERROR: submit_sprites stride mismatch (got={}, want=10)",
-                            len % 10
-                        )));
-                    }
                     let mut out = sprites_scratch.borrow_mut();
                     out.clear();
-                    out.reserve(len / 10);
-                    let mut i = 1; // Lua arrays are 1-based
-                    while i <= len {
-                        // entity (UserData EntityId)
-                        let ent_ud: mlua::AnyUserData = sprites.raw_get(i)?; i += 1;
-                        let entity_id = if let Ok(ent) = ent_ud.borrow::<EntityId>() { ent.0 } else {
-                            return Err(mlua::Error::RuntimeError("ARG_ERROR: sprite id must be EntityId".into())); };
-                        // texture (UserData TextureHandle)
-                        let tex_ud: mlua::AnyUserData = sprites.raw_get(i)?; i += 1;
-                        let texture_id = if let Ok(tex) = tex_ud.borrow::<TextureHandle>() { tex.0 } else {
-                            return Err(mlua::Error::RuntimeError("ARG_ERROR: texture must be TextureHandle".into())); };
-                        // remaining 8 numbers
-                        let u0: f32 = sprites.raw_get(i)?; i += 1;
-                        let v0: f32 = sprites.raw_get(i)?; i += 1;
-                        let u1: f32 = sprites.raw_get(i)?; i += 1;
-                        let v1: f32 = sprites.raw_get(i)?; i += 1;
-                        let r: f32 = sprites.raw_get(i)?; i += 1;
-                        let g: f32 = sprites.raw_get(i)?; i += 1;
-                        let b: f32 = sprites.raw_get(i)?; i += 1;
-                        let a: f32 = sprites.raw_get(i)?; i += 1;
-                        out.push(SpriteV2 { entity_id, texture_id, u0, v0, u1, v1, r, g, b, a });
-                    }
+                    parse_sprites_table_to_out(lua, sprites, &mut out)?;
                     tracing::debug!("Submitting {} sprites", out.len());
                     let _ = lua; // silence unused warning
                     (sb_cb)(&out);
@@ -1031,6 +970,72 @@ impl EngineApi {
     }
 }
 
+// DRY helpers for parsing v2 tables
+fn parse_transforms_table_to_out(lua: &Lua, arr: mlua::Table, out: &mut Vec<f64>) -> mlua::Result<()> {
+    let len = arr.raw_len();
+    if len % 6 != 0 {
+        return Err(mlua::Error::RuntimeError(format!(
+            "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)",
+            len % 6
+        )));
+    }
+    out.reserve(len);
+    let mut i = 1;
+    while i <= len {
+        // id can be EntityId userdata or a number
+        let v: mlua::Value = arr.raw_get(i)?; i += 1;
+        let id_num = match v {
+            mlua::Value::UserData(ud) => {
+                if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f64 } else {
+                    return Err(mlua::Error::RuntimeError("ARG_ERROR: id must be EntityId or number".into()));
+                }
+            }
+            _ => f64::from_lua(v, lua)?,
+        };
+        out.push(id_num);
+        // x,y,rot,sx,sy numbers
+        let x: f64 = arr.raw_get(i)?; i += 1; out.push(x);
+        let y: f64 = arr.raw_get(i)?; i += 1; out.push(y);
+        let rot: f64 = arr.raw_get(i)?; i += 1; out.push(rot);
+        let sx: f64 = arr.raw_get(i)?; i += 1; out.push(sx);
+        let sy: f64 = arr.raw_get(i)?; i += 1; out.push(sy);
+    }
+    Ok(())
+}
+
+fn parse_sprites_table_to_out(_lua: &Lua, sprites: mlua::Table, out: &mut Vec<SpriteV2>) -> mlua::Result<()> {
+    let len = sprites.raw_len();
+    if len % 10 != 0 {
+        return Err(mlua::Error::RuntimeError(format!(
+            "ARG_ERROR: submit_sprites stride mismatch (got={}, want=10)",
+            len % 10
+        )));
+    }
+    out.reserve(len / 10);
+    let mut i = 1; // Lua arrays are 1-based
+    while i <= len {
+        // entity (UserData EntityId)
+        let ent_ud: mlua::AnyUserData = sprites.raw_get(i)?; i += 1;
+        let entity_id = if let Ok(ent) = ent_ud.borrow::<EntityId>() { ent.0 } else {
+            return Err(mlua::Error::RuntimeError("ARG_ERROR: sprite id must be EntityId".into())); };
+        // texture (UserData TextureHandle)
+        let tex_ud: mlua::AnyUserData = sprites.raw_get(i)?; i += 1;
+        let texture_id = if let Ok(tex) = tex_ud.borrow::<TextureHandle>() { tex.0 } else {
+            return Err(mlua::Error::RuntimeError("ARG_ERROR: texture must be TextureHandle".into())); };
+        // remaining 8 numbers
+        let u0: f32 = sprites.raw_get(i)?; i += 1;
+        let v0: f32 = sprites.raw_get(i)?; i += 1;
+        let u1: f32 = sprites.raw_get(i)?; i += 1;
+        let v1: f32 = sprites.raw_get(i)?; i += 1;
+        let r: f32 = sprites.raw_get(i)?; i += 1;
+        let g: f32 = sprites.raw_get(i)?; i += 1;
+        let b: f32 = sprites.raw_get(i)?; i += 1;
+        let a: f32 = sprites.raw_get(i)?; i += 1;
+        out.push(SpriteV2 { entity_id, texture_id, u0, v0, u1, v1, r, g, b, a });
+    }
+    Ok(())
+}
+
 // FrameBuilder façade over typed buffers
 pub struct FrameBuilder {
     t_key: RegistryKey,
@@ -1047,6 +1052,18 @@ impl FrameBuilder {
 
 impl UserData for FrameBuilder {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        // Raw-units transform
+        methods.add_method_mut("transform", |lua, this, (i, id_ud, x, y, rot, sx, sy): (usize, AnyUserData, f64, f64, f64, f64, f64)| {
+            let t_ud: AnyUserData = lua.registry_value(&this.t_key)?;
+            let tb = t_ud.borrow::<TransformBuffer>()?;
+            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+            let cap = *tb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
+            let entity_id = id_ud.borrow::<EntityId>()?.0 as f64;
+            let off = idx * 6; let mut b = tb.buf.borrow_mut();
+            b[off+0]=entity_id; b[off+1]=x; b[off+2]=y; b[off+3]=rot; b[off+4]=sx; b[off+5]=sy;
+            let mut l = tb.len.borrow_mut(); if i > *l { *l = i; }
+            Ok(())
+        });
         methods.add_method_mut("transform_px", |lua, this, (i, id_ud, x_px, y_px, rot, w_px, h_px): (usize, AnyUserData, f64, f64, f64, f64, f64)| {
             let t_ud: AnyUserData = lua.registry_value(&this.t_key)?;
             let tb = t_ud.borrow::<TransformBuffer>()?;
@@ -1082,6 +1099,17 @@ impl UserData for FrameBuilder {
             let row = &mut rows[idx];
             row.entity_id = entity_id; row.u0=u0; row.v0=v0; row.u1=u1; row.v1=v1;
             let mut l = sb.len.borrow_mut(); if i > *l { *l = i; }
+            Ok(())
+        });
+        methods.add_method_mut("sprite_color", |lua, this, (i, r, g, b, a): (usize, f32, f32, f32, f32)| {
+            let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
+            let sb = s_ud.borrow::<SpriteBuffer>()?;
+            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+            let cap = *sb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
+            let mut rows = sb.rows.borrow_mut();
+            let row = &mut rows[idx];
+            row.r=r; row.g=g; row.b=b; row.a=a;
+            // length unchanged; no entity/tex set here
             Ok(())
         });
         methods.add_method_mut("sprite_named", |lua, this, (i, id_ud, atlas_ud, name, r, g, b, a): (usize, AnyUserData, AnyUserData, String, f32, f32, f32, f32)| {

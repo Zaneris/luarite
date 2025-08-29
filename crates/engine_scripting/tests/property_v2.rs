@@ -15,7 +15,7 @@ fn truncate_to_stride6(mut v: Vec<f64>) -> Vec<f64> {
 
 proptest! {
     #[test]
-    fn base_api_valid_stride_passes(mut vals in proptest::collection::vec((-1e3f64..1e3f64), 0..120)) {
+    fn base_api_valid_stride_passes(vals in proptest::collection::vec(-1e3f64..1e3f64, 0..120)) {
         let lua = Lua::new();
         let api = EngineApi::new();
         api.setup_engine_namespace(&lua).unwrap();
@@ -28,7 +28,7 @@ proptest! {
     }
 
     #[test]
-    fn base_api_invalid_stride_fails(mut vals in proptest::collection::vec((-1e3f64..1e3f64), 1..120)) {
+    fn base_api_invalid_stride_fails(mut vals in proptest::collection::vec(-1e3f64..1e3f64, 1..120)) {
         // Ensure length is not multiple of 6
         if vals.len() % 6 == 0 {
             vals.push(0.0);
@@ -55,7 +55,7 @@ fn build_sprite_table(lua: &Lua, vals: &[f64]) -> mlua::Table {
 
 proptest! {
     #[test]
-    fn base_api_sprites_valid_stride_passes(mut vals in proptest::collection::vec((-1e3f64..1e3f64), 0..200)) {
+    fn base_api_sprites_valid_stride_passes(mut vals in proptest::collection::vec(-1e3f64..1e3f64, 0..200)) {
         let lua = Lua::new();
         let api = EngineApi::new();
         api.setup_engine_namespace(&lua).unwrap();
@@ -71,7 +71,7 @@ proptest! {
     }
 
     #[test]
-    fn base_api_sprites_invalid_stride_fails(mut vals in proptest::collection::vec((-1e3f64..1e3f64), 1..200)) {
+    fn base_api_sprites_invalid_stride_fails(mut vals in proptest::collection::vec(-1e3f64..1e3f64, 1..200)) {
         let lua = Lua::new();
         let api = EngineApi::new();
         api.setup_engine_namespace(&lua).unwrap();
@@ -88,7 +88,7 @@ proptest! {
 
 proptest! {
     #[test]
-    fn sinks_valid_stride_passes_and_hits_sink(mut vals in proptest::collection::vec((-1e3f64..1e3f64), 0..120)) {
+    fn sinks_valid_stride_passes_and_hits_sink(vals in proptest::collection::vec(-1e3f64..1e3f64, 0..120)) {
         let lua = Lua::new();
         let api = EngineApi::new();
 
@@ -115,7 +115,7 @@ proptest! {
     }
 
     #[test]
-    fn sinks_invalid_stride_fails(mut vals in proptest::collection::vec((-1e3f64..1e3f64), 1..120)) {
+    fn sinks_invalid_stride_fails(mut vals in proptest::collection::vec(-1e3f64..1e3f64, 1..120)) {
         if vals.len() % 6 == 0 { vals.push(0.0); }
 
         let lua = Lua::new();

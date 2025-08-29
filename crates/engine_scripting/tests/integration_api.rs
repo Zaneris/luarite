@@ -31,6 +31,7 @@ fn sinks_integration_end_to_end() {
         Rc::new(move |path, id| tex_ev2.borrow_mut().push((path, id))),
         Rc::new(|| InputSnapshot::default()),
         Rc::new(|| (1024, 768)),
+        Rc::new(|_| {}),
     )
     .unwrap();
 
@@ -83,6 +84,7 @@ fn input_provider_is_accessible_from_lua() {
         Rc::new(|_, _| {}),
         input_provider,
         Rc::new(|| (1024, 768)),
+        Rc::new(|_| {}),
     )
     .unwrap();
 
@@ -115,6 +117,7 @@ fn metrics_provider_roundtrip() {
         Rc::new(|_, _| {}),
         Rc::new(|| InputSnapshot::default()),
         Rc::new(|| (1024, 768)),
+        Rc::new(|_| {}),
     )
     .unwrap();
 

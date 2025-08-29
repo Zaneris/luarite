@@ -5,7 +5,7 @@ Luarite is a small, batched 2D engine written in Rust with a sandboxed Lua 5.4 s
 ## Highlights
 - Rust core: `winit` (window/input), `wgpu` (render), `glam` (math), `tracing` (logs)
 - Lua 5.4 scripting via `mlua` (vendored), whitelisted safe_base
-- Batched v2 API: flat arrays for transforms/sprites (minimal crossings)
+- Batched API: typed buffers (zero-GC) + legacy v2 arrays
 - Y‑up world coordinates (pixels), texture batching, scratch‑buffer reuse
 - Tests: unit + integration + property (proptest) for marshalling and sandboxing
 
@@ -32,10 +32,14 @@ Demo: A simple Pong‑like script is provided in `scripts/game.lua` (controls: `
 - Entities & textures
   - `engine.create_entity() -> id`
   - `engine.load_texture(path) -> tex` (host loads from disk; falls back to white if missing)
-- Batched submission (v2 arrays)
-  - `engine.set_transforms(arr)` stride=6: `id, x, y, rot, sx, sy`
-  - `engine.submit_sprites(arr)` stride=10: `id, tex, u0, v0, u1, v1, r, g, b, a`
-  - Tip: reuse one `transforms` and one `sprites` table; avoid creating new tables each frame
+- Batched submission
+  - Typed buffers (preferred):
+    - `local T = engine.create_transform_buffer(cap)` with `T:set(i, id, x, y, rot, sx, sy)` or `T:set_px(i, id, x_px, y_px, rot, w_px, h_px)`; submit via `engine.set_transforms(T)`.
+    - `local S = engine.create_sprite_buffer(cap)` with `S:set(i, id, tex, u0, v0, u1, v1, r, g, b, a)`, `S:set_tex`, `S:set_uv_rect`, `S:set_color`, `S:set_named_uv(i, atlas, name)`; submit via `engine.submit_sprites(S)`.
+    - Optional builder: `local fb = engine.frame_builder(T, S)` then `fb:transform_px(...)`, `fb:sprite_tex(...)` or `fb:sprite_named(...)`, `fb:commit()`.
+  - Legacy v2 arrays: still supported for portability
+    - `engine.set_transforms(arr)` stride=6: `id, x, y, rot, sx, sy`
+    - `engine.submit_sprites(arr)` stride=10: `id, tex, u0, v0, u1, v1, r, g, b, a`
 - Time, input, window
   - `engine.time() -> seconds` (fixed‑step time)
   - `engine.get_input() -> snapshot` (methods: `get_key(name)`, `get_mouse_button(name)`, `mouse_pos()`)
@@ -50,25 +54,24 @@ Demo: A simple Pong‑like script is provided in `scripts/game.lua` (controls: `
 ```lua
 assert(engine.api_version == 1)
 
-local transforms, sprites = {}, {}
-local e, tex
+local T, S, e, tex
 
 function on_start()
   e = engine.create_entity()
   tex = engine.load_texture("assets/atlas.png")
-  -- id,x,y,rot,sx,sy   (sx/sy in ~64px units)
-  transforms[1], transforms[2], transforms[3], transforms[4], transforms[5], transforms[6] = e, 100, 100, 0.0, 1.0, 1.0
-  -- id,tex,u0,v0,u1,v1,r,g,b,a
-  for i=1,10 do sprites[i]=0 end
-  sprites[1], sprites[2] = e, tex
-  sprites[3], sprites[4], sprites[5], sprites[6] = 0.0, 0.0, 1.0, 1.0
-  sprites[7], sprites[8], sprites[9], sprites[10] = 1.0, 1.0, 1.0, 1.0
+  engine.units.set_pixels_per_unit(64)
+  T = engine.create_transform_buffer(1)
+  S = engine.create_sprite_buffer(1)
+  T:set_px(1, e, 100, 100, 0.0, 64, 64)
+  local fb = engine.frame_builder(T, S)
+  fb:sprite_tex(1, e, tex, 0.0,0.0,1.0,1.0, 1.0,1.0,1.0,1.0)
 end
 
 function on_update(dt)
-  transforms[2] = transforms[2] + 60*dt -- move +Y each frame
-  engine.set_transforms(transforms)
-  engine.submit_sprites(sprites)
+  -- move +Y each frame and submit once
+  T:set_px(1, e, 100, 100 + 60*dt, 0.0, 64, 64)
+  engine.set_transforms(T)
+  engine.submit_sprites(S)
 end
 ```
 

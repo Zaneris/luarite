@@ -2,6 +2,9 @@ use engine_scripting::api::{EngineApi, InputSnapshot, SpriteV2};
 use mlua::Lua;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::fs;
+use std::io::Write;
+use std::path::PathBuf;
 
 #[test]
 fn typed_transform_buffer_hits_sink() {
@@ -34,6 +37,37 @@ fn typed_transform_buffer_hits_sink() {
 }
 
 #[test]
+fn transform_buffer_set_px_converts_units() {
+    let lua = Lua::new();
+    let api = EngineApi::new();
+    let captured: Rc<RefCell<Option<Vec<f64>>>> = Rc::new(RefCell::new(None));
+    let cap2 = captured.clone();
+    api
+        .setup_engine_namespace_with_sinks(
+            &lua,
+            Rc::new(move |slice| {
+                *cap2.borrow_mut() = Some(slice.to_vec());
+            }),
+            Rc::new(|_| {}),
+        )
+        .unwrap();
+
+    let script = r#"
+        engine.units.set_pixels_per_unit(32)
+        local T = engine.create_transform_buffer(1)
+        local e = engine.create_entity()
+        T:set_px(1, e, 0, 0, 0.0, 64, 96)
+        engine.set_transforms(T)
+    "#;
+    lua.load(script).exec().unwrap();
+
+    let tr = captured.borrow().clone().unwrap();
+    // sx=64/32=2, sy=96/32=3
+    assert!((tr[4] - 2.0).abs() < 1e-9);
+    assert!((tr[5] - 3.0).abs() < 1e-9);
+}
+
+#[test]
 fn typed_sprite_buffer_hits_sink() {
     let lua = Lua::new();
     let api = EngineApi::new();
@@ -50,6 +84,7 @@ fn typed_sprite_buffer_hits_sink() {
             Rc::new(|_, _| {}),
             Rc::new(|| InputSnapshot::default()),
             Rc::new(|| (800, 600)),
+            Rc::new(|_| {}),
         )
         .unwrap();
 
@@ -71,7 +106,7 @@ fn typed_sprite_buffer_hits_sink() {
 }
 
 #[test]
-fn atlas_load_missing_is_nil() {
+fn atlas_load_parses_json() {
     let lua = Lua::new();
     let api = EngineApi::new();
     api
@@ -83,12 +118,21 @@ fn atlas_load_missing_is_nil() {
             Rc::new(|_, _| {}),
             Rc::new(|| InputSnapshot::default()),
             Rc::new(|| (800, 600)),
+            Rc::new(|_| {}),
         )
         .unwrap();
-    let val: mlua::Value = lua
-        .load("return engine.atlas_load('nope.png','missing.json')")
-        .eval()
-        .unwrap();
-    matches!(val, mlua::Value::Nil);
+    // Write a temporary atlas JSON
+    let mut p = PathBuf::from(std::env::temp_dir());
+    p.push(format!("atlas_test_{}.json", std::process::id()));
+    let mut f = fs::File::create(&p).unwrap();
+    write!(
+        f,
+        "{{\n  \"width\": 128, \"height\": 64, \"frames\": {{ \"ball\": {{ \"x\": 0, \"y\": 0, \"w\": 16, \"h\": 16 }} }}\n}}"
+    )
+    .unwrap();
+    drop(f);
+    let script = format!("return engine.atlas_load('dummy.png','{}')", p.display());
+    let val: mlua::Value = lua.load(&script).eval().unwrap();
+    // Should be a userdata Atlas when JSON is present
+    match val { mlua::Value::UserData(_) => {}, _ => panic!("expected Atlas user data") }
 }
-

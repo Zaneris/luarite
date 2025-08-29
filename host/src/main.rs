@@ -144,6 +144,7 @@ fn main() -> Result<()> {
                     if let Ok(v) = ws.lock() { *v } else { (1024,768) }
                 })
             },
+            Rc::new(|msg: String| { tracing::info!("HUD: {}", msg); }),
         )?;
     }
 

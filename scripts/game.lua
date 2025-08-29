@@ -102,9 +102,7 @@ function on_update(dt)
   if hud_t >= 1.0 then
     hud_t = 0.0
     local m = engine.get_metrics()
-    if engine.hud_printf then
-      engine.hud_printf("L:%d R:%d | cpu=%.2fms | sprites=%d", score_l, score_r, m.cpu_frame_ms, m.sprites_submitted)
-    end
+    engine.hud_printf(string.format("L:%d R:%d | cpu=%.2fms | sprites=%d", score_l, score_r, m.cpu_frame_ms, m.sprites_submitted))
   end
 end
 

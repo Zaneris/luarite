@@ -16,6 +16,7 @@ use winit::{
 type OnStartCb = Box<dyn FnMut(&mut EngineState)>;
 type OnUpdateCb = Box<dyn FnMut(f64, &mut EngineState)>;
 type OnEndFrameCb = Box<dyn FnMut(&EngineState, &MetricsCollector)>;
+type HudLinesHandle = std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>;
 
 pub struct EngineWindow {
     window: Option<Arc<Window>>,
@@ -31,6 +32,8 @@ pub struct EngineWindow {
     on_end_frame: Option<OnEndFrameCb>,
     // Input
     pub(crate) input: std::sync::Arc<std::sync::Mutex<InputState>>,
+    // HUD lines (provided by host)
+    hud_lines: Option<HudLinesHandle>,
 }
 
 impl EngineWindow {
@@ -47,6 +50,7 @@ impl EngineWindow {
             script_on_update: None,
             on_end_frame: None,
             input: std::sync::Arc::new(std::sync::Mutex::new(InputState::new())),
+            hud_lines: None,
         }
     }
 
@@ -89,6 +93,10 @@ impl EngineWindow {
 
     pub fn input_handle(&self) -> std::sync::Arc<std::sync::Mutex<InputState>> {
         self.input.clone()
+    }
+
+    pub fn set_hud_lines_handle(&mut self, h: HudLinesHandle) {
+        self.hud_lines = Some(h);
     }
 }
 
@@ -262,6 +270,14 @@ impl ApplicationHandler for EngineWindow {
             }
             // Record draw calls and sprites planned for this frame
             self.metrics.record_draws(renderer.get_draw_call_count(), renderer.get_sprite_count());
+
+            // Update HUD overlay if we have lines
+            if let Some(lines) = &self.hud_lines {
+                if let Ok(l) = lines.lock() {
+                    let (rgba, w, h) = crate::hud::rasterize_hud(&l.iter().cloned().collect::<Vec<_>>(), &self.metrics);
+                    let _ = renderer.set_hud_rgba(&rgba, w, h);
+                }
+            }
         }
 
         // Reset engine frame counters

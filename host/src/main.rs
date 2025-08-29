@@ -22,8 +22,9 @@ fn main() -> Result<()> {
             }
         }
     }
+    // Reduce terminal output now that we have an on-screen HUD. Default to WARN.
     tracing_subscriber::fmt()
-        .with_max_level(Level::DEBUG)
+        .with_max_level(Level::WARN)
         .init();
 
     info!("Luarite Engine starting...");
@@ -61,6 +62,7 @@ fn main() -> Result<()> {
         ffi_calls: u32,
     }
     let hud_metrics = Arc::new(Mutex::new(HudMetrics::default()));
+    let hud_lines: Arc<Mutex<std::collections::VecDeque<String>>> = Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(16)));
     // Window size shared with Lua window_size()
     let window_size = Arc::new(Mutex::new((1024u32, 768u32)));
 
@@ -167,7 +169,15 @@ fn main() -> Result<()> {
                     if let Ok(v) = ws.lock() { *v } else { (1024,768) }
                 })
             },
-            Rc::new(|msg: String| { tracing::info!("HUD: {}", msg); }),
+            {
+                let h = hud_lines.clone();
+                Rc::new(move |msg: String| {
+                    if let Ok(mut q) = h.lock() {
+                        if q.len() >= 12 { q.pop_front(); }
+                        q.push_back(msg);
+                    }
+                })
+            },
         )?;
     }
 
@@ -383,6 +393,9 @@ fn main() -> Result<()> {
             }
         });
     }
+
+    // Provide HUD lines handle to engine window so it can render the overlay
+    window.set_hud_lines_handle(hud_lines.clone());
 
     window.run()?;
 

@@ -172,6 +172,12 @@ pub struct SpriteRenderer {
 
     // Transforms for entity management
     transforms: std::collections::HashMap<u32, Transform>,
+
+    // HUD overlay
+    hud_texture: Option<Texture>,
+    hud_bind_group: Option<wgpu::BindGroup>,
+    hud_size: (u32, u32),
+    hud_scale: f32,
 }
 
 impl SpriteRenderer {
@@ -377,6 +383,10 @@ impl SpriteRenderer {
             batches: Vec::with_capacity(64),
             last_draw_calls: 0,
             transforms: std::collections::HashMap::new(),
+            hud_texture: None,
+            hud_bind_group: None,
+            hud_size: (0, 0),
+            hud_scale: 2.0,
         })
     }
 
@@ -601,6 +611,40 @@ impl SpriteRenderer {
                     render_pass.draw_indexed(batch.start_index..(batch.start_index + batch.index_count), 0, 0..1);
                 }
             }
+
+            // Draw HUD last if present
+            if self.hud_texture.is_some() && self.hud_bind_group.is_some() {
+                // Build quad for HUD at top-left with small inset
+                let hud_w = self.hud_size.0 as f32 * self.hud_scale.max(1.0);
+                let hud_h = self.hud_size.1 as f32 * self.hud_scale.max(1.0);
+                let inset = 8.0;
+                let pos = Vec2::new(hud_w * 0.5 + inset, self.config.height as f32 - hud_h * 0.5 - inset);
+                let sprite = SpriteInstance {
+                    entity_id: u32::MAX,
+                    texture_id: u32::MAX,
+                    position: pos,
+                    rotation: 0.0,
+                    scale: Vec2::new(hud_w, hud_h),
+                    // Flip V to account for raster buffer row order
+                    uv_rect: Vec4::new(0.0, 1.0, 1.0, 0.0),
+                    color: Vec4::new(1.0, 1.0, 1.0, 1.0),
+                };
+                let base_sprite = self.sprite_vertices.len() / 4;
+                let _ = self.add_sprite_to_batch(sprite, base_sprite);
+                // Upload the appended vertices/indices
+                self.queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.sprite_vertices));
+                self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&self.sprite_indices));
+                // Issue draw for the last quad
+                render_pass.set_pipeline(&self.render_pipeline);
+                render_pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                if let Some(hud_bg) = self.hud_bind_group.as_ref() {
+                    render_pass.set_bind_group(1, hud_bg, &[]);
+                }
+                let start = (base_sprite as u32) * 6;
+                render_pass.draw_indexed(start..start + 6, 0, 0..1);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -700,6 +744,44 @@ impl SpriteRenderer {
         } else {
             None
         }
+    }
+
+    pub fn set_hud_rgba(&mut self, rgba: &[u8], w: u32, h: u32) -> Result<()> {
+        // Create texture and bind group for HUD panel
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hud_texture"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.config.format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            rgba,
+            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.texture_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+            label: Some("hud_bind_group"),
+        });
+        self.hud_texture = Some(Texture { texture, view, sampler });
+        self.hud_bind_group = Some(bind_group);
+        self.hud_size = (w, h);
+        Ok(())
+    }
+
+    pub fn set_hud_scale(&mut self, scale: f32) {
+        self.hud_scale = scale.max(1.0);
     }
 }
 

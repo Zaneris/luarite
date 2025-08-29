@@ -109,8 +109,11 @@ fn main() -> Result<()> {
         )?;
     }
 
-    // Load the main game script
-    sandbox.load_script(include_str!("../../scripts/game.lua"), "game.lua")?;
+    // Load the main game script from disk (enables reload)
+    const SCRIPT_PATH: &str = "scripts/game.lua";
+    let script_src = std::fs::read_to_string(SCRIPT_PATH)?;
+    sandbox.load_script(&script_src, "game.lua")?;
+    let mut last_mtime = std::fs::metadata(SCRIPT_PATH).and_then(|m| m.modified()).ok();
 
     // Wire script lifecycle into engine window
     {
@@ -125,14 +128,40 @@ fn main() -> Result<()> {
         let sandbox_for_update = sandbox.clone();
         let mut api_for_update = api; // move into closure to keep time updated
         let exchange_for_update = exchange.clone();
+        let sandbox_for_reload = sandbox.clone();
+        let mut quiesce_frames: u8 = 0;
         let mut sprites_scratch: Vec<SpriteData> = Vec::with_capacity(1024);
         window.set_script_on_update(move |dt, state| {
             // Advance engine time for Lua view
             api_for_update.update_time(dt);
 
-            // Call Lua on_update(dt)
-            if let Err(e) = sandbox_for_update.call_function::<(f64,), ()>("on_update", (dt,)) {
-                tracing::error!("on_update error: {}", e);
+            // File watcher: reload if modified
+            if let Ok(meta) = std::fs::metadata(SCRIPT_PATH) {
+                if let Ok(modified) = meta.modified() {
+                    if Some(modified) != last_mtime {
+                        match std::fs::read_to_string(SCRIPT_PATH) {
+                            Ok(src) => {
+                                if let Err(e) = sandbox_for_reload.reload_script(&src, "game.lua") {
+                                    tracing::error!("Reload failed: {}", e);
+                                } else {
+                                    tracing::info!("Script reloaded: {}", SCRIPT_PATH);
+                                    last_mtime = Some(modified);
+                                    quiesce_frames = 1; // skip next on_update
+                                }
+                            }
+                            Err(e) => tracing::warn!("Failed to read script: {}", e),
+                        }
+                    }
+                }
+            }
+
+            // Call Lua on_update(dt), unless quiescing this frame
+            if quiesce_frames == 0 {
+                if let Err(e) = sandbox_for_update.call_function::<(f64,), ()>("on_update", (dt,)) {
+                    tracing::error!("on_update error: {}", e);
+                }
+            } else {
+                quiesce_frames = quiesce_frames.saturating_sub(1);
             }
 
             // Drain exchange into engine state

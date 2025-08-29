@@ -169,6 +169,58 @@ impl LuaSandbox {
         Ok(())
     }
 
+    pub fn reload_script(&self, script_content: &str, script_name: &str) -> Result<()> {
+        // Capture old env
+        let old_env: Table = self
+            .lua
+            .named_registry_value("current_env")
+            .map_err(|e| anyhow::Error::msg(format!("get current_env failed: {}", e)))?;
+
+        // Build new env from safe_base
+        let safe_base: Table = self
+            .lua
+            .named_registry_value("safe_base")
+            .map_err(|e| anyhow::Error::msg(format!("get safe_base failed: {}", e)))?;
+        let env = self
+            .lua
+            .create_table()
+            .map_err(|e| anyhow::Error::msg(format!("create_table failed: {}", e)))?;
+        let mt = self
+            .lua
+            .create_table()
+            .map_err(|e| anyhow::Error::msg(format!("create_table failed: {}", e)))?;
+        mt.set("__index", safe_base)
+            .map_err(|e| anyhow::Error::msg(format!("set __index failed: {}", e)))?;
+        env.set_metatable(Some(mt));
+        if let Ok(engine_tbl) = self.lua.globals().get::<Table>("engine") {
+            env.set("engine", engine_tbl)
+                .map_err(|e| anyhow::Error::msg(format!("env.set engine failed: {}", e)))?;
+        }
+
+        // Load script into new env
+        let chunk = self.lua.load(script_content).set_name(script_name);
+        let chunk = chunk.set_environment(env.clone());
+        chunk
+            .exec()
+            .map_err(|e| anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e)))?;
+
+        // Call new env's on_start() first to (re)initialize arrays/tables
+        if let Ok(on_start) = env.get::<mlua::Function>("on_start") {
+            let _ = on_start.call::<()>(());
+        }
+        // Then allow state migration via on_reload(old_env)
+        if let Ok(on_reload) = env.get::<mlua::Function>("on_reload") {
+            let _ = on_reload.call::<()>(old_env);
+        }
+
+        // Swap current env
+        self.lua
+            .set_named_registry_value("current_env", env)
+            .map_err(|e| anyhow::Error::msg(format!("set current_env failed: {}", e)))?;
+
+        Ok(())
+    }
+
     pub fn call_function<A, R>(&self, func_name: &str, args: A) -> Result<R>
     where
         A: mlua::IntoLuaMulti,

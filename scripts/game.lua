@@ -13,7 +13,9 @@ local w, h = 1024, 768
 local paddle_w, paddle_h = 16, 100
 local ball_size = 16
 local speed_paddle = 420.0
-local vx, vy = 280.0, 180.0 -- ball velocity in px/s
+-- Base ball speed (px/s); edit and hot-reload to change
+local base_vx, base_vy = 280.0, 180.0
+local vx, vy = base_vx, base_vy -- current ball velocity
 local px_l, py_l = 40.0, 0.0
 local px_r, py_r = 0.0, 0.0
 local bx, by = 0.0, 0.0
@@ -36,9 +38,11 @@ end
 
 local function reset_ball()
   bx, by = w * 0.5, h * 0.5
-  local dir = (math.random() < 0.5) and -1.0 or 1.0
-  vx = dir * 280.0
-  vy = (math.random() * 2.0 - 1.0) * 220.0
+  -- Preserve magnitudes from base values; only randomize direction
+  local dirx = (math.random() < 0.5) and -1.0 or 1.0
+  local diry = (math.random() < 0.5) and -1.0 or 1.0
+  vx = dirx * base_vx
+  vy = diry * base_vy
 end
 
 function on_start()

@@ -15,7 +15,7 @@ pub struct SpriteData {
 #[derive(Debug)]
 pub struct EngineState {
     // Transform data (v2 flat array format)
-    transform_buffer: Vec<f64>, // stride=6: [id, x, y, rot, sx, sy, ...]
+    transform_buffer: Vec<f32>, // stride=6: [id, x, y, rot, sx, sy, ...]
 
     // Sprite data (engine-native representation)
     sprites: Vec<SpriteData>,
@@ -105,7 +105,9 @@ impl EngineState {
         let max_entities = 10_000usize;
         let elems = transforms.len().min(max_entities * 6);
         self.transform_buffer.clear();
-        self.transform_buffer.extend_from_slice(&transforms[..elems]);
+        // Convert to f32 for internal storage
+        self.transform_buffer
+            .extend(transforms[..elems].iter().map(|v| *v as f32));
         self.ffi_calls_this_frame += 1;
 
         tracing::debug!("Set {} transforms", transforms.len() / 6);
@@ -122,13 +124,14 @@ impl EngineState {
         let max_entities = 10_000usize;
         let elems = transforms.len().min(max_entities * 6);
         self.transform_buffer.clear();
-        self.transform_buffer.extend_from_slice(&transforms[..elems]);
+        self.transform_buffer
+            .extend(transforms[..elems].iter().map(|v| *v as f32));
         self.ffi_calls_this_frame += 1;
         tracing::debug!("Set {} transforms", elems / 6);
         Ok(())
     }
 
-    pub fn get_transforms(&self) -> &[f64] {
+    pub fn get_transforms(&self) -> &[f32] {
         &self.transform_buffer
     }
 

@@ -426,7 +426,7 @@ impl SpriteRenderer {
         Ok(())
     }
 
-    pub fn set_transforms_v2(&mut self, transforms: &[f64]) -> Result<()> {
+    pub fn set_transforms_v2(&mut self, transforms: &[f32]) -> Result<()> {
         if transforms.len() % 6 != 0 {
             return Err(anyhow::anyhow!(
                 "Transform array must have stride of 6 (id, x, y, rot, sx, sy)"
@@ -437,9 +437,9 @@ impl SpriteRenderer {
             let entity_id = chunk[0] as u32;
             let transform = Transform {
                 entity_id,
-                position: Vec2::new(chunk[1] as f32, chunk[2] as f32),
-                rotation: chunk[3] as f32,
-                scale: Vec2::new(chunk[4] as f32, chunk[5] as f32),
+                position: Vec2::new(chunk[1], chunk[2]),
+                rotation: chunk[3],
+                scale: Vec2::new(chunk[4], chunk[5]),
             };
             self.transforms.insert(entity_id, transform);
         }

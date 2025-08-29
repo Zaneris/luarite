@@ -1,160 +1,113 @@
--- Pong-like demo using v2 array API
+-- Pong demo using typed buffers (QoL)
 
-assert(engine.api_version == 1, "Script requires API version 1, got " .. tostring(engine.api_version))
+assert(engine.api_version == 1)
 
--- Reusable arrays
-local transforms, sprites = {}, {}
+-- Deterministic RNG for replay
+if engine.seed then engine.seed(1337) else math.randomseed(1337) end
 
--- Entities and texture handle
-local paddle_l, paddle_r, ball, tex
+-- Pixels → units
+engine.units.set_pixels_per_unit(64)
 
--- State
+-- Window & constants
 local w, h = 1024, 768
-local paddle_w, paddle_h = 16, 100
-local ball_size = 16
-local speed_paddle = 420.0
--- Base ball speed (px/s); edit and hot-reload to change
-local base_vx, base_vy = 280.0, 180.0
-local vx, vy = base_vx, base_vy -- current ball velocity
+local PADDLE_W, PADDLE_H = 16, 100
+local BALL_SIZE          = 16
+local SPEED_PADDLE       = 420.0
+local BASE_VX, BASE_VY   = 280.0, 180.0
+
+-- Entities/handles/state
+local paddle_l, paddle_r, ball, tex, atlas
 local px_l, py_l = 40.0, 0.0
 local px_r, py_r = 0.0, 0.0
-local bx, by = 0.0, 0.0
+local bx, by     = 0.0, 0.0
+local vx, vy     = BASE_VX, BASE_VY
 local score_l, score_r = 0, 0
-local hud_t = 0
+local hud_t = 0.0
 
--- v2 helpers
-local v2 = {}
-function v2.set_transform(arr, idx, id, x, y, rot, sx, sy)
-  local o = (idx-1)*6
-  arr[o+1], arr[o+2], arr[o+3] = id, x, y
-  arr[o+4], arr[o+5], arr[o+6] = rot, sx, sy
-end
-function v2.set_sprite(arr, idx, id, tex, u0, v0, u1, v1, r, g, b, a)
-  local o = (idx-1)*10
-  arr[o+1], arr[o+2] = id, tex
-  arr[o+3], arr[o+4], arr[o+5], arr[o+6] = u0, v0, u1, v1
-  arr[o+7], arr[o+8], arr[o+9], arr[o+10] = r, g, b, a
-end
+-- Typed buffers (capacity 3)
+local T = engine.create_transform_buffer(3)
+local S = engine.create_sprite_buffer(3)
 
 local function reset_ball()
-  bx, by = w * 0.5, h * 0.5
-  -- Preserve magnitudes from base values; only randomize direction
-  local dirx = (math.random() < 0.5) and -1.0 or 1.0
-  local diry = (math.random() < 0.5) and -1.0 or 1.0
-  vx = dirx * base_vx
-  vy = diry * base_vy
-end
-
-function on_start()
-  -- Window size
-  local ww, hh = engine.window_size()
-  if ww and hh then w, h = ww, hh end
-
-  -- Entities
-  paddle_l = engine.create_entity()
-  paddle_r = engine.create_entity()
-  ball     = engine.create_entity()
-  -- Texture (will fall back to white if missing)
-  tex = engine.load_texture("assets/atlas.png")
-
-  -- Initial positions
-  px_l, py_l = 40.0, h * 0.5
-  px_r, py_r = w - 40.0, h * 0.5
-  reset_ball()
-
-  -- Pre-size arrays for 3 entities
-  v2.set_transform(transforms, 1, paddle_l, px_l, py_l, 0.0, paddle_w/64.0, paddle_h/64.0)
-  v2.set_transform(transforms, 2, paddle_r, px_r, py_r, 0.0, paddle_w/64.0, paddle_h/64.0)
-  v2.set_transform(transforms, 3, ball,     bx,   by,   0.0, ball_size/64.0, ball_size/64.0)
-
-  v2.set_sprite(sprites, 1, paddle_l, tex, 0.0, 0.0, 1.0, 1.0, 0.2, 0.8, 0.2, 1.0)
-  v2.set_sprite(sprites, 2, paddle_r, tex, 0.0, 0.0, 1.0, 1.0, 0.2, 0.2, 0.8, 1.0)
-  v2.set_sprite(sprites, 3, ball,     tex, 0.0, 0.0, 1.0, 1.0, 0.9, 0.9, 0.2, 1.0)
-
-  engine.log("info", string.format("Pong start %dx%d", w, h))
+  bx, by = w*0.5, h*0.5
+  local dirx = (math.random() < 0.5) and -1 or 1
+  local diry = (math.random() < 0.5) and -1 or 1
+  vx, vy = dirx*BASE_VX, diry*BASE_VY
 end
 
 local function aabb_hit(cx, cy, hw, hh, x, y, s)
-  -- AABB overlap: center/hw/hh for paddle, center/half-size for ball
-  local ax0, ay0 = cx - hw, cy - hh
-  local ax1, ay1 = cx + hw, cy + hh
-  local bx0, by0 = x - s,  y - s
-  local bx1, by1 = x + s,  y + s
+  local ax0, ay0, ax1, ay1 = cx-hw, cy-hh, cx+hw, cy+hh
+  local bx0, by0, bx1, by1 = x-s,  y-s,   x+s,   y+s
   return not (ax1 < bx0 or bx1 < ax0 or ay1 < by0 or by1 < ay0)
 end
 
+local function axis(inp, posKey, negKey)
+  local p = inp:get_key(posKey) and 1 or 0
+  local n = inp:get_key(negKey) and -1 or 0
+  return p + n
+end
+
+function on_start()
+  local ww, hh = engine.window_size(); if ww and hh then w, h = ww, hh end
+  paddle_l = engine.create_entity()
+  paddle_r = engine.create_entity()
+  ball     = engine.create_entity()
+
+  atlas = engine.atlas_load("assets/atlas.png", "assets/atlas.json")
+  tex   = atlas and atlas:tex() or engine.load_texture("assets/atlas.png")
+
+  px_l, py_l = 40.0, h*0.5
+  px_r, py_r = w-40.0, h*0.5
+  reset_ball()
+
+  -- Static sprite attributes set once
+  S:set_tex(1, paddle_l, tex); S:set_color(1, 0.2,0.8,0.2,1.0); if atlas then S:set_named_uv(1, atlas, "paddle") else S:set_uv_rect(1, 0.0,0.0,1.0,1.0) end
+  S:set_tex(2, paddle_r, tex); S:set_color(2, 0.2,0.2,0.8,1.0); if atlas then S:set_named_uv(2, atlas, "paddle") else S:set_uv_rect(2, 0.0,0.0,1.0,1.0) end
+  S:set_tex(3, ball,     tex); S:set_color(3, 0.9,0.9,0.2,1.0); if atlas then S:set_named_uv(3, atlas, "ball")   else S:set_uv_rect(3, 0.0,0.0,1.0,1.0) end
+end
+
 function on_update(dt)
-  -- Input
   local inp = engine.get_input()
-  local upL   = inp:get_key("KeyW")
-  local downL = inp:get_key("KeyS")
-  local upR   = inp:get_key("ArrowUp")
-  local downR = inp:get_key("ArrowDown")
+  local dyL = axis(inp, "KeyW", "KeyS")
+  local dyR = axis(inp, "ArrowUp", "ArrowDown")
 
-  -- With current projection (Y up), increasing Y moves up on screen
-  if upL   then py_l = py_l + speed_paddle * dt end
-  if downL then py_l = py_l - speed_paddle * dt end
-  if upR   then py_r = py_r + speed_paddle * dt end
-  if downR then py_r = py_r - speed_paddle * dt end
+  local phh = PADDLE_H*0.5
+  py_l = math.min(math.max(py_l + dyL*SPEED_PADDLE*dt, phh), h - phh)
+  py_r = math.min(math.max(py_r + dyR*SPEED_PADDLE*dt, phh), h - phh)
 
-  -- Clamp paddles
-  local phh = paddle_h * 0.5
-  if py_l < phh then py_l = phh end
-  if py_l > h - phh then py_l = h - phh end
-  if py_r < phh then py_r = phh end
-  if py_r > h - phh then py_r = h - phh end
-
-  -- Move ball
-  bx = bx + vx * dt
-  by = by + vy * dt
-
-  -- Wall bounce (top/bottom)
-  local bh = ball_size * 0.5
+  bx = bx + vx*dt; by = by + vy*dt
+  local bh = BALL_SIZE*0.5
   if by < bh then by = bh; vy = -vy end
   if by > h - bh then by = h - bh; vy = -vy end
 
-  -- Paddle collisions
-  if aabb_hit(px_l, py_l, paddle_w*0.5, paddle_h*0.5, bx, by, bh) and vx < 0.0 then
-    vx = -vx
-    bx = px_l + paddle_w*0.5 + bh + 1.0
+  if aabb_hit(px_l, py_l, PADDLE_W*0.5, PADDLE_H*0.5, bx, by, bh) and vx < 0 then
+    vx = -vx; bx = px_l + PADDLE_W*0.5 + bh + 1
   end
-  if aabb_hit(px_r, py_r, paddle_w*0.5, paddle_h*0.5, bx, by, bh) and vx > 0.0 then
-    vx = -vx
-    bx = px_r - paddle_w*0.5 - bh - 1.0
+  if aabb_hit(px_r, py_r, PADDLE_W*0.5, PADDLE_H*0.5, bx, by, bh) and vx > 0 then
+    vx = -vx; bx = px_r - PADDLE_W*0.5 - bh - 1
   end
 
-  -- Scoring (left/right walls)
-  if bx < -20.0 then
-    score_r = score_r + 1
-    engine.log("info", string.format("Score L:%d R:%d", score_l, score_r))
-    reset_ball()
-  elseif bx > w + 20.0 then
-    score_l = score_l + 1
-    engine.log("info", string.format("Score L:%d R:%d", score_l, score_r))
-    reset_ball()
-  end
+  if bx < -20 then score_r = score_r + 1; reset_ball()
+  elseif bx > w + 20 then score_l = score_l + 1; reset_ball() end
 
-  -- Update arrays
-  v2.set_transform(transforms, 1, paddle_l, px_l, py_l, 0.0, paddle_w/64.0, paddle_h/64.0)
-  v2.set_transform(transforms, 2, paddle_r, px_r, py_r, 0.0, paddle_w/64.0, paddle_h/64.0)
-  v2.set_transform(transforms, 3, ball,     bx,   by,   0.0, ball_size/64.0, ball_size/64.0)
+  -- Fill transform buffer in pixels (QoL!)
+  T:set_px(1, paddle_l, px_l, py_l, 0, PADDLE_W, PADDLE_H)
+  T:set_px(2, paddle_r, px_r, py_r, 0, PADDLE_W, PADDLE_H)
+  T:set_px(3, ball,     bx,   by,   0, BALL_SIZE, BALL_SIZE)
 
-  engine.set_transforms(transforms)
-  engine.submit_sprites(sprites)
+  engine.set_transforms(T)
+  engine.submit_sprites(S)
 
-  -- HUD log each second
   hud_t = hud_t + dt
   if hud_t >= 1.0 then
     hud_t = 0.0
     local m = engine.get_metrics()
-    engine.log("info", string.format("cpu=%.2fms sprites=%d ffi=%d", m.cpu_frame_ms, m.sprites_submitted, m.ffi_calls))
+    if engine.hud_printf then
+      engine.hud_printf("L:%d R:%d | cpu=%.2fms | sprites=%d", score_l, score_r, m.cpu_frame_ms, m.sprites_submitted)
+    end
   end
 end
 
 function on_reload(old_env)
-    -- Migrate state during hot reload
-    if old_env then
-        time = old_env.time or time
-        engine.log("info", "State migrated during reload, time: " .. tostring(time))
-    end
+  if old_env then end
 end

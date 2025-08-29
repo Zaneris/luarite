@@ -9,6 +9,8 @@ anyhow.workspace = true
 tracing.workspace = true
 glam.workspace = true
 engine_core = { path = "../engine_core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [dev-dependencies]
 proptest.workspace = true

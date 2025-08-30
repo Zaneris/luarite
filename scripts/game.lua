@@ -49,6 +49,8 @@ local function axis(inp, posKey, negKey)
 end
 
 function on_start()
+  -- Explicitly set background to black
+  if engine.set_clear_color then engine.set_clear_color(0.0, 0.0, 0.0) end
   local ww, hh = engine.window_size(); if ww and hh then w, h = ww, hh end
   paddle_l = engine.create_entity()
   paddle_r = engine.create_entity()

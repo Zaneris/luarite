@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 pub mod input;
 pub mod metrics;
 pub mod renderer;

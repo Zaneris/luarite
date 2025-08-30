@@ -178,6 +178,9 @@ pub struct SpriteRenderer {
     hud_bind_group: Option<wgpu::BindGroup>,
     hud_size: (u32, u32),
     hud_scale: f32,
+
+    // Clear/background color
+    clear_color: wgpu::Color,
 }
 
 impl SpriteRenderer {
@@ -387,6 +390,7 @@ impl SpriteRenderer {
             hud_bind_group: None,
             hud_size: (0, 0),
             hud_scale: 2.0,
+            clear_color: wgpu::Color::BLACK,
         })
     }
 
@@ -575,12 +579,7 @@ impl SpriteRenderer {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(self.clear_color),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -657,6 +656,9 @@ impl SpriteRenderer {
         &mut self,
         engine_state: &crate::state::EngineState,
     ) -> Result<()> {
+        // Sync clear color from engine state
+        let cc = engine_state.get_clear_color();
+        self.clear_color = wgpu::Color { r: cc[0] as f64, g: cc[1] as f64, b: cc[2] as f64, a: cc[3] as f64 };
         // Clear previous frame data
         self.sprite_vertices.clear();
         self.sprite_indices.clear();

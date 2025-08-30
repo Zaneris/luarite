@@ -48,6 +48,7 @@ fn sprites_persist_across_frames_without_resubmission() {
         Rc::new(|| InputSnapshot::default()),
         Rc::new(|| (256, 256)),
         Rc::new(|_| {}),
+        Rc::new(|_,_,_,_| {}),
     )
     .unwrap();
 
@@ -114,4 +115,3 @@ fn sprites_persist_across_frames_without_resubmission() {
     let (r2, g2, b2) = sample(&rgba2, 120, 120);
     assert!(r2 > 200 && g2 < 40 && b2 > 200);
 }
-

@@ -38,6 +38,9 @@ pub struct EngineState {
     // Window info
     window_width: u32,
     window_height: u32,
+
+    // Clear/background color (r,g,b,a in 0..1)
+    clear_color: [f32; 4],
 }
 
 impl EngineState {
@@ -54,6 +57,7 @@ impl EngineState {
             ffi_calls_this_frame: 0,
             window_width: 1024,
             window_height: 768,
+            clear_color: [0.0, 0.0, 0.0, 1.0],
         }
     }
 
@@ -265,6 +269,15 @@ impl EngineState {
 
     pub fn window_size(&self) -> (u32, u32) {
         (self.window_width, self.window_height)
+    }
+
+    // Clear/background color
+    pub fn set_clear_color(&mut self, r: f32, g: f32, b: f32, a: f32) {
+        self.clear_color = [r, g, b, a];
+    }
+
+    pub fn get_clear_color(&self) -> [f32; 4] {
+        self.clear_color
     }
 
     // Determinism: compute a stable hash of the transform buffer

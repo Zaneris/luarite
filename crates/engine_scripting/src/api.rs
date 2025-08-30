@@ -849,6 +849,7 @@ impl EngineApi {
         input_provider: Rc<dyn Fn() -> InputSnapshot>,
         window_size_provider: Rc<dyn Fn() -> (u32, u32)>,
         hud_printf_cb: Rc<dyn Fn(String)>,
+        set_clear_color_cb: Rc<dyn Fn(f32, f32, f32, f32)>,
     ) -> Result<()> {
         // First install base + sinks
         self.setup_engine_namespace_with_sinks(
@@ -918,6 +919,31 @@ impl EngineApi {
         engine_table
             .set("hud_printf", hud_fn)
             .map_err(|e| anyhow::Error::msg(format!("Failed to set hud_printf: {}", e)))?;
+
+        // Add set_clear_color(r, g, b, a?) -> sets background; alpha optional (default 1)
+        let scc = set_clear_color_cb.clone();
+        let set_clear_color_fn = lua
+            .create_function(move |lua, args: mlua::Variadic<mlua::Value>| {
+                if args.len() < 3 {
+                    return Err(mlua::Error::RuntimeError(
+                        "ARG_ERROR: set_clear_color expects 3 or 4 numbers".into(),
+                    ));
+                }
+                let r: f32 = f32::from_lua(args[0].clone(), lua)?;
+                let g: f32 = f32::from_lua(args[1].clone(), lua)?;
+                let b: f32 = f32::from_lua(args[2].clone(), lua)?;
+                let a: f32 = if args.len() >= 4 {
+                    f32::from_lua(args[3].clone(), lua)?
+                } else {
+                    1.0
+                };
+                scc(r, g, b, a);
+                Ok(())
+            })
+            .map_err(|e| anyhow::Error::msg(format!("Failed to create set_clear_color: {}", e)))?;
+        engine_table
+            .set("set_clear_color", set_clear_color_fn)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to set set_clear_color: {}", e)))?;
 
         // Override load_texture to notify host and return a handle immediately
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);

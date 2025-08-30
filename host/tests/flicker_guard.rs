@@ -44,6 +44,7 @@ fn double_drain_same_frame_keeps_sprites() {
         Rc::new(|| InputSnapshot::default()),
         Rc::new(|| (256, 256)),
         Rc::new(|_| {}),
+        Rc::new(|_,_,_,_| {}),
     )
     .unwrap();
 
@@ -94,4 +95,3 @@ fn double_drain_same_frame_keeps_sprites() {
     let b = rgba[idx + 2] as i32;
     assert!(r > 200 && g < 40 && b > 200, "unexpected center color {},{},{}", r, g, b);
 }
-

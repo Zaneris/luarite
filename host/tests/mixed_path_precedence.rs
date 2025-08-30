@@ -46,6 +46,7 @@ fn typed_submission_takes_precedence_over_v2() {
         Rc::new(|| InputSnapshot::default()),
         Rc::new(|| (256, 256)),
         Rc::new(|_| {}),
+        Rc::new(|_,_,_,_| {}),
     )
     .unwrap();
 
@@ -99,4 +100,3 @@ fn typed_submission_takes_precedence_over_v2() {
     let b = rgba[idx + 2] as i32;
     assert!(r > 200 && g < 40 && b > 200, "typed should win over v2; got {},{},{}", r, g, b);
 }
-

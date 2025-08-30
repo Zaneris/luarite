@@ -60,6 +60,10 @@ fn lua_draws_magenta_quad_offscreen() {
         input,
         window_size,
         hud,
+        Rc::new({
+            let state_ptr: *mut EngineState = &mut state;
+            move |r,g,b,a| unsafe { (*state_ptr).set_clear_color(r,g,b,a); }
+        }),
     )
     .unwrap();
 
@@ -84,4 +88,40 @@ fn lua_draws_magenta_quad_offscreen() {
     let x = 128u32; let y = 128u32; let idx = ((y * 256 + x) * 4) as usize;
     let r = rgba[idx] as i32; let g = rgba[idx+1] as i32; let b = rgba[idx+2] as i32;
     assert!(r > 200 && g < 40 && b > 200, "unexpected center color {},{},{}", r,g,b);
+}
+
+#[test]
+fn lua_sets_background_clear_color() {
+    let lua = Lua::new();
+    let api = EngineApi::new();
+    let mut state = EngineState::new();
+    state.set_window_size(64, 64);
+
+    // Minimal sinks; only clear color used
+    api.setup_engine_namespace_with_sinks_and_metrics(
+        &lua,
+        Rc::new(|_| {}),
+        None,
+        Rc::new(|_| {}),
+        None,
+        Rc::new(|| (0.0, 0, 0)),
+        Rc::new(|_, _| {}),
+        Rc::new(|| InputSnapshot::default()),
+        Rc::new(|| (64, 64)),
+        Rc::new(|_| {}),
+        Rc::new({
+            let state_ptr: *mut EngineState = &mut state;
+            move |r,g,b,a| unsafe { (*state_ptr).set_clear_color(r,g,b,a); }
+        }),
+    ).unwrap();
+
+    // Script sets clear to red
+    lua.load("engine.set_clear_color(1.0, 0.0, 0.0)").exec().unwrap();
+
+    let rdr = pollster::block_on(OffscreenRenderer::new(64, 64)).unwrap();
+    let rgba = rdr.render_state_to_rgba(&state).unwrap();
+    // Sample center pixel; expect red background (no sprites)
+    let idx = ((32u32 * 64 + 32u32) * 4) as usize;
+    let r = rgba[idx] as i32; let g = rgba[idx+1] as i32; let b = rgba[idx+2] as i32;
+    assert!(r > 200 && g < 40 && b < 40, "unexpected bg color {},{},{}", r, g, b);
 }

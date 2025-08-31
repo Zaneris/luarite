@@ -115,7 +115,7 @@ impl OffscreenRenderer {
         for sd in sprites.iter() {
             if let Some(&(x,y,rot,sx,sy)) = tmap.get(&sd.entity_id) {
                 let pos = Vec2::new(x, y);
-                let scale = Vec2::new(sx, sy) * 64.0;
+                let scale = Vec2::new(sx, sy); // Use direct virtual canvas coordinates
                 let half = scale * 0.5;
                 let cosr = (rot as f32).cos();
                 let sinr = (rot as f32).sin();

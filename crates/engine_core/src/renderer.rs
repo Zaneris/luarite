@@ -153,6 +153,9 @@ pub struct SpriteRenderer {
     index_buffer: wgpu::Buffer,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
+    // Separate uniform buffer for presentation pass to avoid conflicts
+    present_uniform_buffer: wgpu::Buffer,
+    present_uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
 
     // Sprite batch data
@@ -186,7 +189,6 @@ pub struct SpriteRenderer {
     scene_texture: Option<Texture>,
     scene_bind_group: Option<wgpu::BindGroup>,
     nearest_sampler: wgpu::Sampler,
-    linear_sampler: wgpu::Sampler,
     virtual_size: (u32, u32),
 }
 
@@ -310,6 +312,22 @@ impl SpriteRenderer {
             label: Some("uniform_bind_group"),
         });
 
+        // Create separate uniform buffer for presentation pass
+        let present_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("present_uniform_buffer"),
+            size: std::mem::size_of::<[[f32; 4]; 4]>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let present_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &uniform_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: present_uniform_buffer.as_entire_binding(),
+            }],
+            label: Some("present_uniform_bind_group"),
+        });
+
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("render_pipeline_layout"),
@@ -383,15 +401,6 @@ impl SpriteRenderer {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             ..Default::default()
         });
-        let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
 
         Ok(Self {
             device,
@@ -403,6 +412,8 @@ impl SpriteRenderer {
             index_buffer,
             uniform_buffer,
             uniform_bind_group,
+            present_uniform_buffer,
+            present_uniform_bind_group,
             texture_bind_group_layout,
             max_sprites,
             sprite_vertices: Vec::with_capacity(max_sprites as usize * 4),
@@ -421,7 +432,6 @@ impl SpriteRenderer {
             scene_texture: None,
             scene_bind_group: None,
             nearest_sampler,
-            linear_sampler,
             virtual_size: (1920, 1080),
         })
     }
@@ -448,6 +458,7 @@ impl SpriteRenderer {
 
     fn update_projection_matrix_for(&self, w: u32, h: u32) {
         let projection = Mat4::orthographic_lh(0.0, w as f32, 0.0, h as f32, -1000.0, 1000.0);
+        println!("DEBUG: Setting projection matrix for {}x{} - orthographic_lh(0, {}, 0, {}, -1000, 1000)", w, h, w, h);
         self.queue
             .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&projection.to_cols_array()));
     }
@@ -571,97 +582,106 @@ impl SpriteRenderer {
 
     pub fn render(&mut self) -> Result<()> {
         let output = self.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Upload vertex/index for world if any
+        // Upload vertex/index data
         if !self.sprite_vertices.is_empty() {
             self.queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.sprite_vertices));
             self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&self.sprite_indices));
         }
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("sprite_render_encoder"),
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("minimal_render_encoder"),
+        });
+
+        // MINIMAL: Just render scene texture full-screen stretched (no scaling logic)
+        if let Some(scene) = &self.scene_texture {
+            // Step 1: Render sprites to 320x180 virtual canvas
+            let projection_virtual = Mat4::orthographic_lh(0.0, 320.0, 0.0, 180.0, -1000.0, 1000.0);
+            self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&projection_virtual.to_cols_array()));
+            
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("virtual_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &scene.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
             });
 
-        // Pass A: render world to scene target with virtual projection
-        if let Some(scene) = &self.scene_texture {
-            self.update_projection_matrix_for(self.virtual_size.0, self.virtual_size.1);
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("world_pass"), color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &scene.view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(self.clear_color), store: wgpu::StoreOp::Store } })], depth_stencil_attachment: None, occlusion_query_set: None, timestamp_writes: None });
             if !self.sprite_vertices.is_empty() {
                 pass.set_pipeline(&self.render_pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                let white_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor { layout: &self.texture_bind_group_layout, entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.white_texture.view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.white_texture.sampler) },
-                ], label: Some("white_texture_bind_group") });
+                let white_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.white_texture.view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.white_texture.sampler) },
+                    ],
+                    label: Some("white_bg"),
+                });
                 for batch in &self.batches {
-                    if let Some(bg) = self.get_bind_group(batch.texture_id) { pass.set_bind_group(1, bg, &[]); } else { pass.set_bind_group(1, &white_bind_group, &[]); }
+                    if let Some(bg) = self.get_bind_group(batch.texture_id) {
+                        pass.set_bind_group(1, bg, &[]);
+                    } else {
+                        pass.set_bind_group(1, &white_bind_group, &[]);
+                    }
                     pass.draw_indexed(batch.start_index..(batch.start_index + batch.index_count), 0, 0..1);
                 }
             }
-        }
+            drop(pass);
 
-        // Pass B: composite scene to backbuffer, and then draw HUD
-        self.update_projection_matrix_for(self.config.width, self.config.height);
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor { label: Some("present_pass"), color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(self.clear_color), store: wgpu::StoreOp::Store } })], depth_stencil_attachment: None, occlusion_query_set: None, timestamp_writes: None });
-            if let Some(scene) = &self.scene_texture {
-                let (dx,dy,dw,dh, use_nearest) = self.compute_present_rect();
-                let verts = [
-                    SpriteVertex { position: [dx, dy, 0.0], tex_coords: [0.0, 0.0], color: [1.0,1.0,1.0,1.0] },
-                    SpriteVertex { position: [dx+dw, dy, 0.0], tex_coords: [1.0, 0.0], color: [1.0,1.0,1.0,1.0] },
-                    SpriteVertex { position: [dx+dw, dy+dh, 0.0], tex_coords: [1.0, 1.0], color: [1.0,1.0,1.0,1.0] },
-                    SpriteVertex { position: [dx, dy+dh, 0.0], tex_coords: [0.0, 1.0], color: [1.0,1.0,1.0,1.0] },
-                ];
-                let idx: [u16;6] = [0,1,2,2,3,0];
-                self.queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&verts));
-                self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&idx));
-                pass.set_pipeline(&self.render_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                // choose sampler
-                let sampler = if use_nearest { &self.nearest_sampler } else { &self.linear_sampler };
-                let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor { layout: &self.texture_bind_group_layout, entries: &[
+            // Step 2: Present 320x180 texture stretched to full screen
+            let window_w = self.config.width as f32;
+            let window_h = self.config.height as f32;
+            let projection_window = Mat4::orthographic_lh(0.0, window_w, 0.0, window_h, -1000.0, 1000.0);
+            self.queue.write_buffer(&self.present_uniform_buffer, 0, bytemuck::cast_slice(&projection_window.to_cols_array()));
+
+            let fullscreen_verts = [
+                SpriteVertex { position: [0.0, 0.0, 0.0], tex_coords: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                SpriteVertex { position: [window_w, 0.0, 0.0], tex_coords: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                SpriteVertex { position: [window_w, window_h, 0.0], tex_coords: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                SpriteVertex { position: [0.0, window_h, 0.0], tex_coords: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+            ];
+            let fullscreen_idx: [u16; 6] = [0, 1, 2, 2, 3, 0];
+            self.queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&fullscreen_verts));
+            self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&fullscreen_idx));
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("present_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(self.clear_color), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+
+            pass.set_pipeline(&self.render_pipeline);
+            pass.set_bind_group(0, &self.present_uniform_bind_group, &[]);
+            let scene_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.texture_bind_group_layout,
+                entries: &[
                     wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scene.view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
-                ], label: Some("scene_present_bg") });
-                pass.set_bind_group(1, &bg, &[]);
-                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed(0..6, 0, 0..1);
-            }
-            // HUD
-            if let Some(hud_bg) = self.hud_bind_group.as_ref() {
-                let hud_w = self.hud_size.0 as f32 * self.hud_scale.max(1.0);
-                let hud_h = self.hud_size.1 as f32 * self.hud_scale.max(1.0);
-                let inset = 8.0;
-                let top_y = self.config.height as f32 - inset - hud_h;
-                let verts = [
-                    SpriteVertex { position: [inset, top_y, 0.0], tex_coords: [0.0, 1.0], color: [1.0,1.0,1.0,1.0] },
-                    SpriteVertex { position: [inset+hud_w, top_y, 0.0], tex_coords: [1.0, 1.0], color: [1.0,1.0,1.0,1.0] },
-                    SpriteVertex { position: [inset+hud_w, top_y+hud_h, 0.0], tex_coords: [1.0, 0.0], color: [1.0,1.0,1.0,1.0] },
-                    SpriteVertex { position: [inset, top_y+hud_h, 0.0], tex_coords: [0.0, 0.0], color: [1.0,1.0,1.0,1.0] },
-                ];
-                let idx: [u16;6] = [0,1,2,2,3,0];
-                self.queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&verts));
-                self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&idx));
-                pass.set_pipeline(&self.render_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_bind_group(1, hud_bg, &[]);
-                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed(0..6, 0, 0..1);
-            }
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.nearest_sampler) },
+                ],
+                label: Some("scene_bg"),
+            });
+            pass.set_bind_group(1, &scene_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            pass.draw_indexed(0..6, 0, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
-
         Ok(())
     }
 
@@ -669,6 +689,7 @@ impl SpriteRenderer {
         &mut self,
         engine_state: &crate::state::EngineState,
     ) -> Result<()> {
+        println!("DEBUG: update_from_engine_state called, virtual resolution: {:?}", engine_state.get_virtual_resolution());
         // Sync clear color from engine state
         let cc = engine_state.get_clear_color();
         self.clear_color = wgpu::Color { r: cc[0] as f64, g: cc[1] as f64, b: cc[2] as f64, a: cc[3] as f64 };
@@ -705,7 +726,7 @@ impl SpriteRenderer {
                         texture_id: sd.texture_id,
                         position: transform.position,
                         rotation: transform.rotation,
-                        scale: transform.scale * 64.0,
+                        scale: transform.scale, // Use direct virtual canvas coordinates
                         uv_rect: Vec4::new(sd.uv[0], sd.uv[1], sd.uv[2], sd.uv[3]),
                         color: Vec4::new(sd.color[0], sd.color[1], sd.color[2], sd.color[3]),
                     };
@@ -723,17 +744,17 @@ impl SpriteRenderer {
 
     fn ensure_scene_texture(&mut self, engine_state: &crate::state::EngineState) -> Result<()> {
         let (vw, vh) = match engine_state.get_virtual_resolution() {
-            crate::state::VirtualResolution::Retro320x180 => (320u32, 180u32),
-            crate::state::VirtualResolution::Hd1920x1080 => (1920u32, 1080u32),
-        };
-        let recreate = match &self.scene_texture {
-            Some(tex) => {
-                // No size query; recreate every time surface size changes or if dimensions mismatch heuristic
-                // For simplicity, recreate if None currently; otherwise keep existing
-                let _ = tex; false
+            crate::state::VirtualResolution::Retro320x180 => {
+                println!("DEBUG: Using Retro320x180 virtual resolution");
+                (320u32, 180u32)
             }
-            None => true,
+            crate::state::VirtualResolution::Hd1920x1080 => {
+                println!("DEBUG: Using Hd1920x1080 virtual resolution");
+                (1920u32, 1080u32)
+            }
         };
+        // Always recreate scene texture to ensure it exists and has correct dimensions
+        let recreate = true;
         if recreate {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("scene_texture"),
@@ -765,38 +786,6 @@ impl SpriteRenderer {
         Ok(())
     }
 
-    fn compute_present_rect(&self) -> (f32, f32, f32, f32, bool) {
-        // (x, y, w, h, use_nearest) based on self.virtual_size
-        let (vw, vh) = (self.virtual_size.0 as f32, self.virtual_size.1 as f32);
-        let ww = self.config.width as f32;
-        let wh = self.config.height as f32;
-        let five = 0.05f32;
-        if (vw as u32, vh as u32) == (320, 180) {
-                let s_fit = (ww / vw).floor().min((wh / vh).floor()).max(1.0);
-                let s_fill = (ww / vw).min(wh / vh).ceil();
-                let mut s = s_fit;
-                if s_fill > s_fit {
-                    let sw = vw * s_fill; let sh = vh * s_fill;
-                    let crop_w = if sw > ww { (sw - ww) / sw } else { 0.0 };
-                    let crop_h = if sh > wh { (sh - wh) / sh } else { 0.0 };
-                    if crop_w <= five && crop_h <= five { s = s_fill; }
-                }
-                let dw = vw * s; let dh = vh * s; let dx = (ww - dw) * 0.5; let dy = (wh - dh) * 0.5;
-                (dx.max(0.0), dy.max(0.0), dw.min(ww), dh.min(wh), true)
-        } else {
-                let s_fit = (ww / vw).min(wh / vh);
-                let s_int = s_fit.floor();
-                if s_int >= 1.0 { let dw = vw * s_int; let dh = vh * s_int; let dx = (ww-dw)*0.5; let dy=(wh-dh)*0.5; return (dx,dy,dw,dh,true); }
-                let s_ceil = (ww / vw).min(wh / vh).ceil();
-                if s_ceil >= 1.0 {
-                    let sw = vw * s_ceil; let sh = vh * s_ceil;
-                    let crop_w = if sw > ww { (sw - ww) / sw } else { 0.0 };
-                    let crop_h = if sh > wh { (sh - wh) / sh } else { 0.0 };
-                    if crop_w <= five && crop_h <= five { let dw=sw.min(ww); let dh=sh.min(wh); let dx=(ww-dw)*0.5; let dy=(wh-dh)*0.5; return (dx,dy,dw,dh,true); }
-                }
-                let dw = vw * s_fit; let dh = vh * s_fit; let dx = (ww-dw)*0.5; let dy=(wh-dh)*0.5; (dx,dy,dw,dh,false)
-        }
-    }
 
     pub fn get_sprite_count(&self) -> u32 {
         (self.sprite_vertices.len() / 4) as u32

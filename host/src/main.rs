@@ -197,8 +197,16 @@ fn main() -> Result<()> {
             {
                 let ex_rm = exchange.clone();
                 Rc::new(move |mode: &'static str| {
+                    println!("DEBUG: set_render_resolution called with mode: {}", mode);
                     if let Ok(mut ex) = ex_rm.lock() {
-                        ex.render_mode = Some(if mode == "retro" { engine_core::state::VirtualResolution::Retro320x180 } else { engine_core::state::VirtualResolution::Hd1920x1080 });
+                        let resolution = if mode == "retro" { 
+                            println!("DEBUG: Setting Retro320x180 resolution");
+                            engine_core::state::VirtualResolution::Retro320x180 
+                        } else { 
+                            println!("DEBUG: Setting Hd1920x1080 resolution");
+                            engine_core::state::VirtualResolution::Hd1920x1080 
+                        };
+                        ex.render_mode = Some(resolution);
                     }
                 })
             },
@@ -285,6 +293,7 @@ fn main() -> Result<()> {
                     state.set_clear_color(r,g,b,a);
                 }
                 if let Some(m) = ex.render_mode.take() {
+                    println!("DEBUG: Applying virtual resolution to engine state: {:?}", m);
                     state.set_virtual_resolution(m);
                 }
                 // Handle queued texture loads

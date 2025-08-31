@@ -35,6 +35,7 @@ fn sinks_integration_end_to_end() {
         Rc::new(|| (1024, 768)),
         Rc::new(|_| {}),
         Rc::new(|_,_,_,_| {}),
+        Rc::new(|_| {}),
     )
     .unwrap();
 
@@ -91,6 +92,7 @@ fn input_provider_is_accessible_from_lua() {
         Rc::new(|| (1024, 768)),
         Rc::new(|_| {}),
         Rc::new(|_,_,_,_| {}),
+        Rc::new(|_| {}),
     )
     .unwrap();
 
@@ -127,6 +129,7 @@ fn metrics_provider_roundtrip() {
         Rc::new(|| (1024, 768)),
         Rc::new(|_| {}),
         Rc::new(|_,_,_,_| {}),
+        Rc::new(|_| {}),
     )
     .unwrap();
 

@@ -50,6 +50,7 @@ fn host_drain_swaps_typed_buffers_and_renders() {
         window_size,
         hud,
         Rc::new(|_,_,_,_| {}),
+        Rc::new(|_| {}),
     )
     .unwrap();
 

@@ -45,6 +45,7 @@ fn double_drain_same_frame_keeps_sprites() {
         Rc::new(|| (256, 256)),
         Rc::new(|_| {}),
         Rc::new(|_,_,_,_| {}),
+        Rc::new(|_| {}),
     )
     .unwrap();
 

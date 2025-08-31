@@ -10,10 +10,11 @@ engine.units.set_pixels_per_unit(64)
 
 -- Window & constants
 local w, h = 1024, 768
-local PADDLE_W, PADDLE_H = 16, 100
-local BALL_SIZE          = 16
-local SPEED_PADDLE       = 420.0
-local BASE_VX, BASE_VY   = 280.0, 180.0
+-- Retro-friendly sizes/speeds for 320x180
+local PADDLE_W, PADDLE_H = 10, 48
+local BALL_SIZE          = 8
+local SPEED_PADDLE       = 140.0
+local BASE_VX, BASE_VY   = 120.0, 90.0
 
 -- Entities/handles/state
 local paddle_l, paddle_r, ball, tex, atlas
@@ -49,9 +50,11 @@ local function axis(inp, posKey, negKey)
 end
 
 function on_start()
-  -- Explicitly set background to black
+  -- Explicitly set background to black and use retro virtual resolution (320x180)
   if engine.set_clear_color then engine.set_clear_color(0.0, 0.0, 0.0) end
-  local ww, hh = engine.window_size(); if ww and hh then w, h = ww, hh end
+  if engine.set_render_resolution then engine.set_render_resolution("retro") end
+  -- Use virtual resolution for gameplay coordinates
+  w, h = 320, 180
   paddle_l = engine.create_entity()
   paddle_r = engine.create_entity()
   ball     = engine.create_entity()
@@ -59,8 +62,8 @@ function on_start()
   atlas = engine.atlas_load("assets/atlas.png", "assets/atlas.json")
   tex   = atlas and atlas:tex() or engine.load_texture("assets/atlas.png")
 
-  px_l, py_l = 40.0, h*0.5
-  px_r, py_r = w-40.0, h*0.5
+  px_l, py_l = 20.0, h*0.5
+  px_r, py_r = w-20.0, h*0.5
   reset_ball()
 
   -- Static sprite attributes set once

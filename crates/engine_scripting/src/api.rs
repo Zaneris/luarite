@@ -850,6 +850,7 @@ impl EngineApi {
         window_size_provider: Rc<dyn Fn() -> (u32, u32)>,
         hud_printf_cb: Rc<dyn Fn(String)>,
         set_clear_color_cb: Rc<dyn Fn(f32, f32, f32, f32)>,
+        set_render_mode_cb: Rc<dyn Fn(&'static str)>,
     ) -> Result<()> {
         // First install base + sinks
         self.setup_engine_namespace_with_sinks(
@@ -944,6 +945,20 @@ impl EngineApi {
         engine_table
             .set("set_clear_color", set_clear_color_fn)
             .map_err(|e| anyhow::Error::msg(format!("Failed to set set_clear_color: {}", e)))?;
+
+        // Add set_render_resolution("retro"|"hd")
+        let srm = set_render_mode_cb.clone();
+        let set_render_fn = lua
+            .create_function(move |_, mode: String| {
+                let m = if mode.eq_ignore_ascii_case("retro") { "retro" } else { "hd" };
+                // static str coercion for callback type simplicity
+                if m == "retro" { srm("retro") } else { srm("hd") }
+                Ok(())
+            })
+            .map_err(|e| anyhow::Error::msg(format!("Failed to create set_render_resolution: {}", e)))?;
+        engine_table
+            .set("set_render_resolution", set_render_fn)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to set set_render_resolution: {}", e)))?;
 
         // Override load_texture to notify host and return a handle immediately
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);

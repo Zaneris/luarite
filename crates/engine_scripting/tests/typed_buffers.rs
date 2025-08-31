@@ -92,6 +92,7 @@ fn typed_sprite_buffer_hits_sink() {
             Rc::new(|| (800, 600)),
             Rc::new(|_| {}),
             Rc::new(|_,_,_,_| {}),
+            Rc::new(|_| {}),
         )
         .unwrap();
 
@@ -129,6 +130,7 @@ fn atlas_load_parses_json() {
             Rc::new(|| (800, 600)),
             Rc::new(|_| {}),
             Rc::new(|_,_,_,_| {}),
+            Rc::new(|_| {}),
         )
         .unwrap();
     // Write a temporary atlas JSON

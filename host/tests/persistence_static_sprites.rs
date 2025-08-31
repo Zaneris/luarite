@@ -49,6 +49,7 @@ fn sprites_persist_across_frames_without_resubmission() {
         Rc::new(|| (256, 256)),
         Rc::new(|_| {}),
         Rc::new(|_,_,_,_| {}),
+        Rc::new(|_| {}),
     )
     .unwrap();
 

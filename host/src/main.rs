@@ -49,10 +49,11 @@ fn main() -> Result<()> {
         drained_tf32_this_frame: bool,
         drained_sprites_this_frame: bool,
         clear_color: Option<[f32;4]>,
+        render_mode: Option<engine_core::state::VirtualResolution>,
     }
     impl Default for ScriptExchange {
         fn default() -> Self {
-            Self { transforms: Vec::with_capacity(1024), transforms_dirty: false, transforms_f32: Vec::with_capacity(1024), transforms_f32_dirty: false, typed_buf: None, typed_sprites: None, sprites: Vec::with_capacity(1024), textures: Vec::new(), drained_tf32_this_frame: false, drained_sprites_this_frame: false, clear_color: None }
+            Self { transforms: Vec::with_capacity(1024), transforms_dirty: false, transforms_f32: Vec::with_capacity(1024), transforms_f32_dirty: false, typed_buf: None, typed_sprites: None, sprites: Vec::with_capacity(1024), textures: Vec::new(), drained_tf32_this_frame: false, drained_sprites_this_frame: false, clear_color: None, render_mode: None }
         }
     }
     let exchange = Arc::new(Mutex::new(ScriptExchange::default()));
@@ -193,6 +194,14 @@ fn main() -> Result<()> {
                     if let Ok(mut ex) = ex_cc.lock() { ex.clear_color = Some([r,g,b,a]); }
                 })
             },
+            {
+                let ex_rm = exchange.clone();
+                Rc::new(move |mode: &'static str| {
+                    if let Ok(mut ex) = ex_rm.lock() {
+                        ex.render_mode = Some(if mode == "retro" { engine_core::state::VirtualResolution::Retro320x180 } else { engine_core::state::VirtualResolution::Hd1920x1080 });
+                    }
+                })
+            },
         )?;
     }
 
@@ -274,6 +283,9 @@ fn main() -> Result<()> {
             if let Ok(mut ex) = exchange_for_update.lock() {
                 if let Some([r,g,b,a]) = ex.clear_color.take() {
                     state.set_clear_color(r,g,b,a);
+                }
+                if let Some(m) = ex.render_mode.take() {
+                    state.set_virtual_resolution(m);
                 }
                 // Handle queued texture loads
                 if !ex.textures.is_empty() {

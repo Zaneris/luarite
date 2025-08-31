@@ -47,6 +47,7 @@ fn typed_submission_takes_precedence_over_v2() {
         Rc::new(|| (256, 256)),
         Rc::new(|_| {}),
         Rc::new(|_,_,_,_| {}),
+        Rc::new(|_| {}),
     )
     .unwrap();
 

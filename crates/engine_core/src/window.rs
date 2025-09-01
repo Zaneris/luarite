@@ -112,7 +112,7 @@ impl ApplicationHandler for EngineWindow {
         if self.window.is_none() {
             let window_attributes = WindowAttributes::default()
                 .with_title("Luarite Engine")
-                .with_inner_size(PhysicalSize::new(1024, 768));
+                .with_inner_size(PhysicalSize::new(1920, 1080));
 
             match event_loop.create_window(window_attributes) {
                 Ok(window) => {
@@ -122,7 +122,7 @@ impl ApplicationHandler for EngineWindow {
                     // Initialize renderer (this is async, we'll handle it in about_to_wait)
                     self.window = Some(window_arc);
                     // Initialize engine_state window size
-                    self.engine_state.set_window_size(1024, 768);
+                    self.engine_state.set_window_size(1920, 1080);
                 }
                 Err(e) => {
                     tracing::error!("Failed to create window: {}", e);

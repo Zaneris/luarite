@@ -49,10 +49,11 @@ fn main() -> Result<()> {
         drained_tf32_this_frame: bool,
         drained_sprites_this_frame: bool,
         clear_color: Option<[f32;4]>,
+        render_mode: Option<engine_core::state::VirtualResolution>,
     }
     impl Default for ScriptExchange {
         fn default() -> Self {
-            Self { transforms: Vec::with_capacity(1024), transforms_dirty: false, transforms_f32: Vec::with_capacity(1024), transforms_f32_dirty: false, typed_buf: None, typed_sprites: None, sprites: Vec::with_capacity(1024), textures: Vec::new(), drained_tf32_this_frame: false, drained_sprites_this_frame: false, clear_color: None }
+            Self { transforms: Vec::with_capacity(1024), transforms_dirty: false, transforms_f32: Vec::with_capacity(1024), transforms_f32_dirty: false, typed_buf: None, typed_sprites: None, sprites: Vec::with_capacity(1024), textures: Vec::new(), drained_tf32_this_frame: false, drained_sprites_this_frame: false, clear_color: None, render_mode: None }
         }
     }
     let exchange = Arc::new(Mutex::new(ScriptExchange::default()));
@@ -77,6 +78,7 @@ fn main() -> Result<()> {
 
     // Last-used input snapshot (what scripts actually saw via engine.get_input)
     let last_used_input_global: Arc<Mutex<InputSnapshot>> = Arc::new(Mutex::new(InputSnapshot::default()));
+    let prev_input_snapshot_global: Arc<Mutex<InputSnapshot>> = Arc::new(Mutex::new(InputSnapshot::default()));
 
     // Install engine namespace with sinks that fill the exchange
     {
@@ -136,14 +138,27 @@ fn main() -> Result<()> {
         // Input providers (live vs replay)
         let input_handle = window.input_handle();
         let last_used_for_live = last_used_input_global.clone();
+        let prev_input_for_live = prev_input_snapshot_global.clone();
         let live_input_provider: Rc<dyn Fn() -> InputSnapshot> = Rc::new(move || {
             let mut snap = InputSnapshot::default();
+            if let Ok(mut prev) = prev_input_for_live.lock() {
+                if let Ok(last) = last_used_for_live.lock() {
+                    *prev = last.clone();
+                }
+            }
+
             if let Ok(inp) = input_handle.lock() {
                 snap.mouse_x = inp.mouse_x;
                 snap.mouse_y = inp.mouse_y;
                 for k in inp.keys.iter() { snap.keys.insert(k.clone(), true); }
                 for b in inp.mouse_buttons.iter() { snap.mouse_buttons.insert(b.clone(), true); }
             }
+
+            if let Ok(prev) = prev_input_for_live.lock() {
+                snap.prev_keys = prev.keys.clone();
+                snap.prev_mouse_buttons = prev.mouse_buttons.clone();
+            }
+
             if let Ok(mut dst) = last_used_for_live.lock() { *dst = snap.clone(); }
             snap
         });
@@ -191,6 +206,19 @@ fn main() -> Result<()> {
                 let ex_cc = exchange.clone();
                 Rc::new(move |r,g,b,a| {
                     if let Ok(mut ex) = ex_cc.lock() { ex.clear_color = Some([r,g,b,a]); }
+                })
+            },
+            {
+                let ex_rm = exchange.clone();
+                Rc::new(move |mode: &'static str| {
+                    if let Ok(mut ex) = ex_rm.lock() {
+                        let resolution = if mode == "retro" { 
+                            engine_core::state::VirtualResolution::Retro320x180 
+                        } else { 
+                            engine_core::state::VirtualResolution::Hd1920x1080 
+                        };
+                        ex.render_mode = Some(resolution);
+                    }
                 })
             },
         )?;
@@ -274,6 +302,9 @@ fn main() -> Result<()> {
             if let Ok(mut ex) = exchange_for_update.lock() {
                 if let Some([r,g,b,a]) = ex.clear_color.take() {
                     state.set_clear_color(r,g,b,a);
+                }
+                if let Some(m) = ex.render_mode.take() {
+                    state.set_virtual_resolution(m);
                 }
                 // Handle queued texture loads
                 if !ex.textures.is_empty() {

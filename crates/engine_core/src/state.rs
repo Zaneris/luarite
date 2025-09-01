@@ -41,6 +41,9 @@ pub struct EngineState {
 
     // Clear/background color (r,g,b,a in 0..1)
     clear_color: [f32; 4],
+
+    // Virtual/internal render resolution mode
+    virtual_mode: VirtualResolution,
 }
 
 impl EngineState {
@@ -55,9 +58,10 @@ impl EngineState {
             next_texture_id: 1,
             fixed_time: 0.0,
             ffi_calls_this_frame: 0,
-            window_width: 1024,
-            window_height: 768,
+            window_width: 1920,
+            window_height: 1080,
             clear_color: [0.0, 0.0, 0.0, 1.0],
+            virtual_mode: VirtualResolution::Hd1920x1080,
         }
     }
 
@@ -280,6 +284,15 @@ impl EngineState {
         self.clear_color
     }
 
+    // Virtual resolution mode
+    pub fn set_virtual_resolution(&mut self, mode: VirtualResolution) {
+        self.virtual_mode = mode;
+    }
+
+    pub fn get_virtual_resolution(&self) -> VirtualResolution {
+        self.virtual_mode
+    }
+
     // Determinism: compute a stable hash of the transform buffer
     pub fn compute_transform_hash(&self) -> u64 {
         // FNV-1a 64-bit over f64 bit patterns
@@ -311,4 +324,9 @@ impl Default for EngineState {
     fn default() -> Self {
         Self::new()
     }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VirtualResolution {
+    Retro320x180,
+    Hd1920x1080,
 }

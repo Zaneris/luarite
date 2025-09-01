@@ -5,18 +5,18 @@ assert(engine.api_version == 1)
 -- Deterministic RNG for replay
 if engine.seed then engine.seed(1337) else math.randomseed(1337) end
 
--- Pixels → units
-engine.units.set_pixels_per_unit(64)
+-- Set pixels-per-unit to 1.0 for direct virtual canvas coordinates
+engine.units.set_pixels_per_unit(1.0)
 
--- Window & constants
-local w, h = 1024, 768
-local PADDLE_W, PADDLE_H = 16, 100
-local BALL_SIZE          = 16
-local SPEED_PADDLE       = 420.0
-local BASE_VX, BASE_VY   = 280.0, 180.0
+-- Virtual canvas coordinates (320x180)
+local w, h = 320, 180
+local PADDLE_W, PADDLE_H = 10, 48
+local BALL_SIZE          = 8
+local SPEED_PADDLE       = 140.0
+local BASE_VX, BASE_VY   = 120.0, 90.0
 
 -- Entities/handles/state
-local paddle_l, paddle_r, ball, tex, atlas
+local background, paddle_l, paddle_r, ball, tex, atlas
 local px_l, py_l = 40.0, 0.0
 local px_r, py_r = 0.0, 0.0
 local bx, by     = 0.0, 0.0
@@ -24,9 +24,9 @@ local vx, vy     = BASE_VX, BASE_VY
 local score_l, score_r = 0, 0
 local hud_t = 0.0
 
--- Typed buffers (capacity 3)
-local T = engine.create_transform_buffer(3)
-local S = engine.create_sprite_buffer(3)
+-- Typed buffers (capacity 4 - added background)
+local T = engine.create_transform_buffer(4)
+local S = engine.create_sprite_buffer(4)
 local fb
 
 local function reset_ball()
@@ -49,9 +49,10 @@ local function axis(inp, posKey, negKey)
 end
 
 function on_start()
-  -- Explicitly set background to black
-  if engine.set_clear_color then engine.set_clear_color(0.0, 0.0, 0.0) end
-  local ww, hh = engine.window_size(); if ww and hh then w, h = ww, hh end
+  -- Explicitly set background to black and use retro virtual resolution (320x180)
+  engine.set_clear_color(0.0, 0.0, 0.0)
+  engine.set_render_resolution("retro")
+  background = engine.create_entity()
   paddle_l = engine.create_entity()
   paddle_r = engine.create_entity()
   ball     = engine.create_entity()
@@ -59,14 +60,15 @@ function on_start()
   atlas = engine.atlas_load("assets/atlas.png", "assets/atlas.json")
   tex   = atlas and atlas:tex() or engine.load_texture("assets/atlas.png")
 
-  px_l, py_l = 40.0, h*0.5
-  px_r, py_r = w-40.0, h*0.5
+  px_l, py_l = 20.0, h*0.5
+  px_r, py_r = w-20.0, h*0.5
   reset_ball()
 
   -- Static sprite attributes set once
-  S:set_tex(1, paddle_l, tex); S:set_color(1, 0.2,0.8,0.2,1.0); if atlas then S:set_named_uv(1, atlas, "paddle") else S:set_uv_rect(1, 0.0,0.0,1.0,1.0) end
-  S:set_tex(2, paddle_r, tex); S:set_color(2, 0.2,0.2,0.8,1.0); if atlas then S:set_named_uv(2, atlas, "paddle") else S:set_uv_rect(2, 0.0,0.0,1.0,1.0) end
-  S:set_tex(3, ball,     tex); S:set_color(3, 0.9,0.9,0.2,1.0); if atlas then S:set_named_uv(3, atlas, "ball")   else S:set_uv_rect(3, 0.0,0.0,1.0,1.0) end
+  S:set_tex(1, background, tex); S:set_color(1, 0.1,0.1,0.1,1.0); S:set_uv_rect(1, 0.0,0.0,1.0,1.0) -- Gray background
+  S:set_tex(2, paddle_l, tex); S:set_color(2, 0.2,0.8,0.2,1.0); if atlas then S:set_named_uv(2, atlas, "paddle") else S:set_uv_rect(2, 0.0,0.0,1.0,1.0) end
+  S:set_tex(3, paddle_r, tex); S:set_color(3, 0.2,0.2,0.8,1.0); if atlas then S:set_named_uv(3, atlas, "paddle") else S:set_uv_rect(3, 0.0,0.0,1.0,1.0) end
+  S:set_tex(4, ball,     tex); S:set_color(4, 0.9,0.9,0.2,1.0); if atlas then S:set_named_uv(4, atlas, "ball")   else S:set_uv_rect(4, 0.0,0.0,1.0,1.0) end
   fb = engine.frame_builder(T, S)
 end
 
@@ -95,9 +97,10 @@ function on_update(dt)
   elseif bx > w + 20 then score_l = score_l + 1; reset_ball() end
 
   -- Fill transforms via builder and commit once
-  fb:transform_px(1, paddle_l, px_l, py_l, 0, PADDLE_W, PADDLE_H)
-  fb:transform_px(2, paddle_r, px_r, py_r, 0, PADDLE_W, PADDLE_H)
-  fb:transform_px(3, ball,     bx,   by,   0, BALL_SIZE, BALL_SIZE)
+  fb:transform_px(1, background, w*0.5, h*0.5, 0, w, h) -- Full 320x180 red background
+  fb:transform_px(2, paddle_l, px_l, py_l, 0, PADDLE_W, PADDLE_H)
+  fb:transform_px(3, paddle_r, px_r, py_r, 0, PADDLE_W, PADDLE_H)
+  fb:transform_px(4, ball,     bx,   by,   0, BALL_SIZE, BALL_SIZE)
   fb:commit()
 
   hud_t = hud_t + dt

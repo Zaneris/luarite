@@ -30,6 +30,7 @@ fn frame_builder_commit_hits_sinks() {
             Rc::new(|| (640, 480)),
             Rc::new(|_| {}),
             Rc::new(|_,_,_,_| {}),
+            Rc::new(|_| {}),
         )
         .unwrap();
 
@@ -78,6 +79,7 @@ fn frame_builder_transform_and_color() {
             Rc::new(|| (800, 600)),
             Rc::new(|_| {}),
             Rc::new(|_,_,_,_| {}),
+            Rc::new(|_| {}),
         )
         .unwrap();
 
@@ -120,6 +122,7 @@ fn hud_printf_callable() {
             Rc::new(|| (800, 600)),
             Rc::new(move |msg: String| msgs2.borrow_mut().push(msg)),
             Rc::new(|_,_,_,_| {}),
+            Rc::new(|_| {}),
         )
         .unwrap();
     lua.load("engine.hud_printf('hello HUD')").exec().unwrap();

@@ -44,14 +44,20 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
     - `engine.submit_sprites(arr)` stride=10: `id, tex, u0, v0, u1, v1, r, g, b, a`
 - Time, input, window
   - `engine.time() -> seconds` (fixed‑step time)
-  - `engine.get_input() -> snapshot` (methods: `get_key(name)`, `get_mouse_button(name)`, `mouse_pos()`)
+  - `engine.get_input() -> snapshot` (methods: `get_key(name)`, `was_key_pressed(name)`, `was_key_released(name)`, `get_mouse_button(name)`, `was_mouse_button_pressed(name)`, `was_mouse_button_released(name)`, `mouse_pos()`)
   - Common key names: `KeyW`, `KeyS`, `ArrowUp`, `ArrowDown`
   - `engine.window_size() -> (w, h)`
+  - `engine.set_render_resolution(mode)` (`retro` or `hd`)
 - Persistence, metrics, HUD
   - `engine.persist(key, value)` / `engine.restore(key)` (in‑process KV)
   - `engine.get_metrics() -> { cpu_frame_ms, sprites_submitted, ffi_calls }`
   - `engine.hud_printf(msg)` prints a line on the HUD (rate‑limited)
   - `engine.log(level, msg)` (`info|warn|error|debug`, rate‑limited)
+
+### Rendering
+- `engine.set_render_resolution(mode)`: Sets the virtual canvas resolution. Supports two modes:
+  - `"retro"`: A 320x180 virtual canvas that is always integer-scaled to fit the window, preserving a pixel-perfect look.
+  - `"hd"`: A 1920x1080 virtual canvas. It will use integer scaling if the window is close (within 5%) to a multiple of 1080p (e.g., 4K). Otherwise, it uses linear filtering for smooth scaling.
 
 ### Minimal Script Skeleton
 ```lua
@@ -60,6 +66,7 @@ assert(engine.api_version == 1)
 local T, S, e, tex, fb
 
 function on_start()
+  engine.set_render_resolution("retro")
   e = engine.create_entity()
   tex = engine.load_texture("assets/atlas.png")
   engine.units.set_pixels_per_unit(64)
@@ -90,6 +97,7 @@ local S = engine.create_sprite_buffer(1)
 local fb = engine.frame_builder(T, S)
 
 function on_start()
+  engine.set_render_resolution("hd")
   fb:transform_px(1, e, 200, 120, 0.0, 64, 64)
   if atlas then fb:sprite_named(1, e, atlas, "ball", 1,1,1,1) else fb:sprite_tex(1, e, tex, 0,0,1,1, 1,1,1,1) end
 end
@@ -126,6 +134,15 @@ end
 - sprite (atlas): `fb:sprite_named(i, entity, atlas, name, r, g, b, a)`
 - sprite_color: `fb:sprite_color(i, r, g, b, a)`
 - commit: `fb:commit()`
+
+### Input
+- `snapshot:get_key(name) -> bool`
+- `snapshot:was_key_pressed(name) -> bool`
+- `snapshot:was_key_released(name) -> bool`
+- `snapshot:get_mouse_button(name) -> bool`
+- `snapshot:was_mouse_button_pressed(name) -> bool`
+- `snapshot:was_mouse_button_released(name) -> bool`
+- `snapshot:mouse_pos() -> (x, y)`
 
 ### HUD & Logging
 - `engine.hud_printf("L:1 R:0 fps=60.0")` shows on‑screen; max ~12 lines kept, 30 msgs/sec rate limit.

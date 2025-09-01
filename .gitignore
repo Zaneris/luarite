@@ -19,3 +19,9 @@ Thumbs.db
 # Temp files
 *.tmp
 *.temp
+
+# AI
+.claude/
+GEMINI.md
+AGENTS.md
+CLAUDE.md

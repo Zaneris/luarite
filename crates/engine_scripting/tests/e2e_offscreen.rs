@@ -64,6 +64,7 @@ fn lua_draws_magenta_quad_offscreen() {
             let state_ptr: *mut EngineState = &mut state;
             move |r,g,b,a| unsafe { (*state_ptr).set_clear_color(r,g,b,a); }
         }),
+        Rc::new(|_| {}),
     )
     .unwrap();
 
@@ -113,6 +114,7 @@ fn lua_sets_background_clear_color() {
             let state_ptr: *mut EngineState = &mut state;
             move |r,g,b,a| unsafe { (*state_ptr).set_clear_color(r,g,b,a); }
         }),
+        Rc::new(|_| {}),
     ).unwrap();
 
     // Script sets clear to red

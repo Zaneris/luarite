@@ -1,6 +1,12 @@
-# Luarite — Rust + Lua 2D Engine (POC)
+# Luarite — Rust + Lua 2D Engine
 
-Luarite is a small, batched 2D engine written in Rust with a sandboxed Lua 5.4 scripting layer. It targets secure, deterministic gameplay with a narrow FFI surface, per‑frame performance budgets, and simple developer ergonomics.
+Luarite is a compact, batched **2D game engine** with a **Rust** core and a **sandboxed Lua 5.4** scripting layer. It’s built for **predictable performance** and **developer ergonomics**: a tiny, stable API; **typed buffers** for transforms and sprites; one-shot batched submission each frame; and guardrails for **safety**, **determinism**, and **zero steady-state allocations**.
+
+The renderer targets a **virtual canvas** so projects look consistent on any display. Author at HD/4K and scale with letterboxing, or switch to **pixel-perfect integer scaling** with point sampling for a retro look—while UI/text remain razor sharp. Under the hood it uses `winit` for window/input, `wgpu` for cross-API rendering, `glam` for math, and `tracing` for structured logs plus a built-in HUD (FPS, p99, sprites, FFI).
+
+Luarite is intentionally minimal: **Y-up** coordinates, f32 transforms, sprite atlases, and a narrow FFI surface designed around **handles and batches**. It includes **hot-reload**, **record/replay** for deterministic debugging, and an **offscreen renderer** for GPU-free end-to-end tests.
+
+> This repository is also an experiment in **AI-assisted development**: to date, no hand-written source has been committed. Code has been generated via tools such as **gemini-cli**, **codex-cli**, and **claude code**, with human intent, constraints, and tests guiding the result.
 
 ## Highlights
 - Rust core: `winit` (window/input), `wgpu` (render), `glam` (math), `tracing` (logs)
@@ -12,7 +18,7 @@ Luarite is a small, batched 2D engine written in Rust with a sandboxed Lua 5.4 s
 
 ## Quick Start
 - Run: `cargo run -p luarite`
-  - Live reloads `scripts/game.lua` on save. Controls for Pong: `W/S`, `ArrowUp/ArrowDown`.
+  - Live reloads `scripts/game.lua` on save. Controls for Pong demo: `W/S`, `ArrowUp/ArrowDown`.
 - Build: `cargo build`
 - Record/Replay (determinism): `cargo run -p luarite -- --record out.log` then `--replay out.log`
 - Lint/format: `cargo fmt --all && cargo clippy --all-targets -- -D warnings`
@@ -161,4 +167,4 @@ end
 - Host e2e tests live in `host/tests` and catch regressions (no‑flicker, persistence, precedence).
 
 ## Notes
-- POC focused on secure, deterministic scripting. Record/replay and richer metrics available; features are evolving.
+- Focused on secure, deterministic scripting. Record/replay and richer metrics available; features are evolving.

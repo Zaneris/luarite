@@ -2,6 +2,7 @@ use anyhow::Result;
 use glam::{Mat4, Vec2, Vec4};
 use image::GenericImageView;
 use std::sync::Arc;
+use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 /// 2D sprite vertex for batched rendering
@@ -498,33 +499,9 @@ impl SpriteRenderer {
         Ok(())
     }
 
-    pub fn submit_sprites_v2(&mut self, sprite_count: u32) -> Result<()> {
+    pub fn submit_sprites_v2(&mut self, _sprite_count: u32) -> Result<()> {
         self.sprite_vertices.clear();
         self.sprite_indices.clear();
-
-        // Collect transforms to avoid borrowing issues
-        let transforms: Vec<Transform> = self
-            .transforms
-            .values()
-            .take(sprite_count as usize)
-            .cloned()
-            .collect();
-
-        // For now, create a simple test sprite using available transforms
-        for (sprite_idx, transform) in transforms.iter().enumerate() {
-            // Create a simple colored quad using the white texture
-            let sprite_instance = SpriteInstance {
-                entity_id: transform.entity_id,
-                texture_id: 0, // Use white texture
-                position: transform.position,
-                rotation: transform.rotation,
-                scale: transform.scale * 64.0, // Make sprites 64x64 pixels
-                uv_rect: Vec4::new(0.0, 0.0, 1.0, 1.0), // Full texture
-                color: Vec4::new(1.0, 0.5, 0.2, 1.0), // Orange color
-            };
-
-            self.add_sprite_to_batch(sprite_instance, sprite_idx)?;
-        }
 
         Ok(())
     }
@@ -582,30 +559,56 @@ impl SpriteRenderer {
 
     pub fn render(&mut self) -> Result<()> {
         let output = self.surface.get_current_texture()?;
-        let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Upload vertex/index data
-        if !self.sprite_vertices.is_empty() {
-            self.queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.sprite_vertices));
-            self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&self.sprite_indices));
+        // Ensure scene texture exists before rendering
+        if self.scene_texture.is_none() {
+            let dummy_state = crate::state::EngineState::new();
+            self.ensure_scene_texture(&dummy_state)?;
         }
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("minimal_render_encoder"),
-        });
+        // Upload sprite vertex/index data if it exists
+        if !self.sprite_vertices.is_empty() {
+            self.queue.write_buffer(
+                &self.vertex_buffer,
+                0,
+                bytemuck::cast_slice(&self.sprite_vertices),
+            );
+            self.queue.write_buffer(
+                &self.index_buffer,
+                0,
+                bytemuck::cast_slice(&self.sprite_indices),
+            );
+        }
 
-        // MINIMAL: Just render scene texture full-screen stretched (no scaling logic)
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render_encoder"),
+            });
+
+        // Step 1: Render sprites to the virtual canvas (offscreen texture)
         if let Some(scene) = &self.scene_texture {
-            // Step 1: Render sprites to 320x180 virtual canvas
-            let projection_virtual = Mat4::orthographic_lh(0.0, 320.0, 0.0, 180.0, -1000.0, 1000.0);
-            self.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&projection_virtual.to_cols_array()));
-            
+            let (vw, vh) = self.virtual_size;
+            let projection_virtual =
+                Mat4::orthographic_lh(0.0, vw as f32, 0.0, vh as f32, -1000.0, 1000.0);
+            self.queue.write_buffer(
+                &self.uniform_buffer,
+                0,
+                bytemuck::cast_slice(&projection_virtual.to_cols_array()),
+            );
+
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("virtual_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &scene.view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(self.clear_color), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(self.clear_color),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 occlusion_query_set: None,
@@ -617,94 +620,156 @@ impl SpriteRenderer {
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                let white_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: &self.texture_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.white_texture.view) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.white_texture.sampler) },
-                    ],
-                    label: Some("white_bg"),
-                });
+
+                // This bind group is only needed if there are sprites with no texture
+                let white_bind_group =
+                    self.device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            layout: &self.texture_bind_group_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(
+                                        &self.white_texture.view,
+                                    ),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(
+                                        &self.white_texture.sampler,
+                                    ),
+                                },
+                            ],
+                            label: Some("white_bg"),
+                        });
+
                 for batch in &self.batches {
                     if let Some(bg) = self.get_bind_group(batch.texture_id) {
                         pass.set_bind_group(1, bg, &[]);
                     } else {
                         pass.set_bind_group(1, &white_bind_group, &[]);
                     }
-                    pass.draw_indexed(batch.start_index..(batch.start_index + batch.index_count), 0, 0..1);
+                    pass.draw_indexed(
+                        batch.start_index..(batch.start_index + batch.index_count),
+                        0,
+                        0..1,
+                    );
                 }
             }
             drop(pass);
+        }
 
-            // Step 2: Present 320x180 texture with integer scaling and letterboxing
-            let projection_identity = Mat4::IDENTITY;
-            self.queue.write_buffer(&self.present_uniform_buffer, 0, bytemuck::cast_slice(&projection_identity.to_cols_array()));
+        // Step 2: Present the virtual canvas and HUD to the screen in a single pass
+        let projection_identity = Mat4::IDENTITY;
+        self.queue.write_buffer(
+            &self.present_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&projection_identity.to_cols_array()),
+        );
 
-            // Calculate letterbox dimensions in pixels
-            let window_w = self.config.width as f32;
-            let window_h = self.config.height as f32;
-            let virtual_w = 320.0;
-            let virtual_h = 180.0;
-            
-            let scale_x = window_w / virtual_w;
-            let scale_y = window_h / virtual_h;
-            let scale = scale_x.min(scale_y);
-            let final_scale = if scale >= 2.0 { scale.floor() } else { scale };
-            
+        let mut present_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("present_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), // Letterbox color
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+        });
+
+        present_pass.set_pipeline(&self.render_pipeline);
+        present_pass.set_bind_group(0, &self.present_uniform_bind_group, &[]);
+
+        // Draw the virtual canvas (letterboxed)
+        if let Some(_scene) = &self.scene_texture {
+            let (window_w, window_h) = (self.config.width as f32, self.config.height as f32);
+            let (virtual_w, virtual_h) = (self.virtual_size.0 as f32, self.virtual_size.1 as f32);
+
+            let scale = (window_w / virtual_w).min(window_h / virtual_h);
+            let final_scale = if scale >= 1.0 { scale.floor() } else { scale };
+
             let scaled_w = virtual_w * final_scale;
             let scaled_h = virtual_h * final_scale;
-            let offset_x = (window_w - scaled_w) * 0.5;
-            let offset_y = (window_h - scaled_h) * 0.5;
+            let offset_x = (window_w - scaled_w) / 2.0;
+            let offset_y = (window_h - scaled_h) / 2.0;
 
-            // Convert pixel coordinates to NDC coordinates (-1 to 1)
-            // Note: NDC Y goes from -1 (bottom) to +1 (top), opposite of pixel coordinates
             let ndc_left = (offset_x / window_w) * 2.0 - 1.0;
             let ndc_right = ((offset_x + scaled_w) / window_w) * 2.0 - 1.0;
-            let ndc_top = 1.0 - (offset_y / window_h) * 2.0;        // Flip Y: top pixels -> +Y NDC
-            let ndc_bottom = 1.0 - ((offset_y + scaled_h) / window_h) * 2.0;  // Flip Y: bottom pixels -> -Y NDC
+            let ndc_top = 1.0 - (offset_y / window_h) * 2.0;
+            let ndc_bottom = 1.0 - ((offset_y + scaled_h) / window_h) * 2.0;
 
-            // Create letterboxed quad in NDC coordinates
-            let letterbox_verts = [
+            let verts = [
                 SpriteVertex { position: [ndc_left, ndc_bottom, 0.0], tex_coords: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
                 SpriteVertex { position: [ndc_right, ndc_bottom, 0.0], tex_coords: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
                 SpriteVertex { position: [ndc_right, ndc_top, 0.0], tex_coords: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
                 SpriteVertex { position: [ndc_left, ndc_top, 0.0], tex_coords: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
             ];
-            let _fullscreen_idx: [u16; 6] = [0, 1, 2, 2, 3, 0];
-
-            let mut _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("present_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-            });
-
-            // RE-ENABLE quad but use white texture instead of scene texture to test
-            _pass.set_pipeline(&self.render_pipeline);
-            _pass.set_bind_group(0, &self.present_uniform_bind_group, &[]);
-
-            // Use scene texture - this should show the virtual canvas but it's somehow white/uninitialized
-            let scene_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scene.view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.nearest_sampler) },
-                ],
-                label: Some("scene_bg"),
-            });
-            _pass.set_bind_group(1, &scene_bind_group, &[]);
-            _pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            _pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            let indices: [u16; 6] = [0, 1, 2, 2, 3, 0];
             
-            self.queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&letterbox_verts));
-            self.queue.write_buffer(&self.index_buffer, 0, bytemuck::cast_slice(&_fullscreen_idx));
-            _pass.draw_indexed(0..6, 0, 0..1);
+            let scene_bg = self.scene_bind_group.as_ref().unwrap();
+            present_pass.set_bind_group(1, scene_bg, &[]);
+
+            let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("present_vbuf"),
+                contents: bytemuck::cast_slice(&verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ibuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("present_ibuf"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+            present_pass.set_vertex_buffer(0, vbuf.slice(..));
+            present_pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint16);
+            present_pass.draw_indexed(0..6, 0, 0..1);
         }
+
+        // Draw the HUD on top
+        if let Some(hud_bg) = self.hud_bind_group.as_ref() {
+            let (hud_w, hud_h) = (self.hud_size.0 as f32, self.hud_size.1 as f32);
+            let (win_w, win_h) = (self.config.width as f32, self.config.height as f32);
+
+            // Position HUD at top-left. Convert pixel coordinates to NDC.
+            let x = 10.0; // 10px from left
+            let y = 10.0; // 10px from top
+            let w = hud_w * self.hud_scale;
+            let h = hud_h * self.hud_scale;
+
+            let ndc_left = (x / win_w) * 2.0 - 1.0;
+            let ndc_right = ((x + w) / win_w) * 2.0 - 1.0;
+            let ndc_top = 1.0 - (y / win_h) * 2.0;
+            let ndc_bottom = 1.0 - ((y + h) / win_h) * 2.0;
+
+            let verts = [
+                SpriteVertex { position: [ndc_left, ndc_bottom, 0.0], tex_coords: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                SpriteVertex { position: [ndc_right, ndc_bottom, 0.0], tex_coords: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
+                SpriteVertex { position: [ndc_right, ndc_top, 0.0], tex_coords: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                SpriteVertex { position: [ndc_left, ndc_top, 0.0], tex_coords: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+            ];
+            let indices: [u16; 6] = [0, 1, 2, 2, 3, 0];
+
+            present_pass.set_bind_group(1, hud_bg, &[]);
+            let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("hud_vbuf"),
+                contents: bytemuck::cast_slice(&verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            let ibuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("hud_ibuf"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+            present_pass.set_vertex_buffer(0, vbuf.slice(..));
+            present_pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint16);
+            present_pass.draw_indexed(0..6, 0, 0..1);
+        }
+
+        drop(present_pass);
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();

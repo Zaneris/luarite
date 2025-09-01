@@ -188,9 +188,11 @@ pub struct SpriteRenderer {
     clear_color: wgpu::Color,
 
     // Virtual scene render target and samplers
+    virtual_mode: crate::state::VirtualResolution,
     scene_texture: Option<Texture>,
     scene_bind_group: Option<wgpu::BindGroup>,
     nearest_sampler: wgpu::Sampler,
+    linear_sampler: wgpu::Sampler,
     virtual_size: (u32, u32),
 }
 
@@ -404,6 +406,16 @@ impl SpriteRenderer {
             ..Default::default()
         });
 
+        let linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+
         Ok(Self {
             device,
             queue,
@@ -431,9 +443,11 @@ impl SpriteRenderer {
             hud_size: (0, 0),
             hud_scale: 2.0,
             clear_color: wgpu::Color::BLACK,
+            virtual_mode: crate::state::VirtualResolution::Hd1920x1080,
             scene_texture: None,
             scene_bind_group: None,
             nearest_sampler,
+            linear_sampler,
             virtual_size: (1920, 1080),
         })
     }
@@ -686,12 +700,24 @@ impl SpriteRenderer {
         present_pass.set_bind_group(0, &self.present_uniform_bind_group, &[]);
 
         // Draw the virtual canvas (letterboxed)
-        if let Some(_scene) = &self.scene_texture {
+        if let Some(scene) = &self.scene_texture {
             let (window_w, window_h) = (self.config.width as f32, self.config.height as f32);
             let (virtual_w, virtual_h) = (self.virtual_size.0 as f32, self.virtual_size.1 as f32);
 
             let scale = (window_w / virtual_w).min(window_h / virtual_h);
-            let final_scale = if scale >= 1.0 { scale.floor() } else { scale };
+
+            let (final_scale, use_linear_scaling) = match self.virtual_mode {
+                crate::state::VirtualResolution::Retro320x180 => (scale.floor().max(1.0), false),
+                crate::state::VirtualResolution::Hd1920x1080 => {
+                    let ideal_scale = (scale * 100.0).round() / 100.0;
+                    let nearest_int_scale = scale.round();
+                    if (ideal_scale - nearest_int_scale).abs() < 0.05 {
+                        (nearest_int_scale, false) // Use integer scaling
+                    } else {
+                        (scale, true) // Use linear scaling
+                    }
+                }
+            };
 
             let scaled_w = virtual_w * final_scale;
             let scaled_h = virtual_h * final_scale;
@@ -710,9 +736,18 @@ impl SpriteRenderer {
                 SpriteVertex { position: [ndc_left, ndc_top, 0.0], tex_coords: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
             ];
             let indices: [u16; 6] = [0, 1, 2, 2, 3, 0];
-            
-            let scene_bg = self.scene_bind_group.as_ref().unwrap();
-            present_pass.set_bind_group(1, scene_bg, &[]);
+
+            let sampler = if use_linear_scaling { &self.linear_sampler } else { &self.nearest_sampler };
+            let scene_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scene.view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                ],
+                label: Some("scene_bg_with_sampler"),
+            });
+
+            present_pass.set_bind_group(1, &scene_bg, &[]);
 
             let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("present_vbuf"),
@@ -783,6 +818,7 @@ impl SpriteRenderer {
         // Sync clear color from engine state
         let cc = engine_state.get_clear_color();
         self.clear_color = wgpu::Color { r: cc[0] as f64, g: cc[1] as f64, b: cc[2] as f64, a: cc[3] as f64 };
+        self.virtual_mode = engine_state.get_virtual_resolution();
         // Ensure scene texture exists for current virtual mode
         self.ensure_scene_texture(engine_state)?;
         // Clear previous frame data
@@ -837,14 +873,15 @@ impl SpriteRenderer {
             crate::state::VirtualResolution::Retro320x180 => (320u32, 180u32),
             crate::state::VirtualResolution::Hd1920x1080 => (1920u32, 1080u32),
         };
-        // Only recreate scene texture if dimensions changed or it doesn't exist
+
         let recreate = match &self.scene_texture {
-            Some(_existing) => {
-                // Check if dimensions match
-                false // For now, don't recreate unnecessarily
+            Some(existing) => {
+                let (current_w, current_h) = (existing.texture.width(), existing.texture.height());
+                current_w != vw || current_h != vh
             }
-            None => true, // Create if doesn't exist
+            None => true,
         };
+
         if recreate {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("scene_texture"),
@@ -857,21 +894,21 @@ impl SpriteRenderer {
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            // Store an internal sampler placeholder; actual present sampler is chosen per frame
             let scene_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor::default());
             self.scene_texture = Some(Texture { texture, view, sampler: scene_sampler });
             self.virtual_size = (vw, vh);
-        }
-        // Create default bind group with nearest; will swap sampler at draw time if needed
-        if let Some(scene) = &self.scene_texture {
-            self.scene_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scene.view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.nearest_sampler) },
-                ],
-                label: Some("scene_bind_group"),
-            }));
+
+            // Update the bind group as well
+            if let Some(scene) = &self.scene_texture {
+                self.scene_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scene.view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.nearest_sampler) },
+                    ],
+                    label: Some("scene_bind_group"),
+                }));
+            }
         }
         Ok(())
     }

@@ -149,168 +149,110 @@ impl EngineApi {
         let globals = lua.globals();
 
         // Create main engine table
-        let engine_table = match lua.create_table() {
-            Ok(table) => table,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create engine table: {}",
-                    e
-                )))
-            }
-        };
+        let engine_table = lua.create_table().map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Constructors: typed buffers
         {
             let ppu = self.pixels_per_unit.clone();
             let tb_ctor = lua
                 .create_function(move |_, cap: usize| Ok(TransformBuffer::new(cap, ppu.clone())))
-                .map_err(|e| anyhow::Error::msg(format!("Failed to create create_transform_buffer: {}", e)))?;
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             engine_table
                 .set("create_transform_buffer", tb_ctor)
-                .map_err(|e| anyhow::Error::msg(format!("Failed to set create_transform_buffer: {}", e)))?;
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
             let sb_ctor = lua
                 .create_function(move |_, cap: usize| Ok(SpriteBuffer::new(cap)))
-                .map_err(|e| anyhow::Error::msg(format!("Failed to create create_sprite_buffer: {}", e)))?;
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             engine_table
                 .set("create_sprite_buffer", sb_ctor)
-                .map_err(|e| anyhow::Error::msg(format!("Failed to set create_sprite_buffer: {}", e)))?;
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         }
 
         // API version and capabilities
-        if let Err(e) = engine_table.set("api_version", API_VERSION) {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set api_version: {}",
-                e
-            )));
-        }
+        engine_table.set("api_version", API_VERSION).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Set up get_capabilities function
-        let caps_func = match lua.create_function(move |_, ()| Ok(EngineCapabilities::default())) {
-            Ok(func) => func,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create get_capabilities: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = engine_table.set("get_capabilities", caps_func) {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set get_capabilities: {}",
-                e
-            )));
-        }
+        let caps_func = lua
+            .create_function(move |_, ()| Ok(EngineCapabilities::default()))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("get_capabilities", caps_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Entity management
         let next_entity_id = std::cell::RefCell::new(self.next_entity_id);
-        let entity_func = match lua.create_function(move |_, ()| {
-            let mut id = next_entity_id.borrow_mut();
-            let entity = EntityId(*id);
-            *id += 1;
-            Ok(entity)
-        }) {
-            Ok(func) => func,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create create_entity: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = engine_table.set("create_entity", entity_func) {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set create_entity: {}",
-                e
-            )));
-        }
+        let entity_func = lua
+            .create_function(move |_, ()| {
+                let mut id = next_entity_id.borrow_mut();
+                let entity = EntityId(*id);
+                *id += 1;
+                Ok(entity)
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("create_entity", entity_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Texture loading
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);
-        let texture_func = match lua.create_function(move |_, path: String| {
-            tracing::info!("Loading texture: {}", path);
-            let mut id = next_texture_id.borrow_mut();
-            let texture = TextureHandle(*id);
-            *id += 1;
-            Ok(texture)
-        }) {
-            Ok(func) => func,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create load_texture: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = engine_table.set("load_texture", texture_func) {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set load_texture: {}",
-                e
-            )));
-        }
+        let texture_func = lua
+            .create_function(move |_, path: String| {
+                tracing::info!("Loading texture: {}", path);
+                let mut id = next_texture_id.borrow_mut();
+                let texture = TextureHandle(*id);
+                *id += 1;
+                Ok(texture)
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("load_texture", texture_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Transform batching (typed buffers only)
-        let transform_func = match lua.create_function(|_, v: Value| {
-            match v {
-                Value::UserData(ud) => {
-                    if let Ok(tb) = ud.borrow::<TransformBuffer>() {
-                        let rows = *tb.len.borrow();
-                        let buf = tb.buf.borrow();
-                        if rows * 6 > buf.len() {
-                            return Err(mlua::Error::RuntimeError("TransformBuffer length exceeds capacity".into()));
+        let transform_func = lua
+            .create_function(|_, v: Value| {
+                match v {
+                    Value::UserData(ud) => {
+                        if let Ok(tb) = ud.borrow::<TransformBuffer>() {
+                            let rows = *tb.len.borrow();
+                            let buf = tb.buf.borrow();
+                            if rows * 6 > buf.len() {
+                                return Err(mlua::Error::RuntimeError(
+                                    "TransformBuffer length exceeds capacity".into(),
+                                ));
+                            }
+                            tracing::debug!("Setting {} transforms (typed)", rows);
+                            Ok(())
+                        } else {
+                            Err(mlua::Error::RuntimeError(
+                                "ARG_ERROR: set_transforms expects TransformBuffer".into(),
+                            ))
                         }
-                        tracing::debug!("Setting {} transforms (typed)", rows);
-                        Ok(())
-                    } else {
-                        Err(mlua::Error::RuntimeError("ARG_ERROR: set_transforms expects TransformBuffer".into()))
                     }
+                    _ => Err(mlua::Error::RuntimeError(
+                        "ARG_ERROR: set_transforms expects TransformBuffer".into(),
+                    )),
                 }
-                _ => Err(mlua::Error::RuntimeError("ARG_ERROR: set_transforms expects TransformBuffer".into())),
-            }
-        }) {
-            Ok(func) => func,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create set_transforms: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = engine_table.set("set_transforms", transform_func) {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set set_transforms: {}",
-                e
-            )));
-        }
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("set_transforms", transform_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Sprite batching (typed buffers only)
-        let sprite_func = match lua.create_function(|_, v: Value| {
-            match v {
-                Value::UserData(ud) => {
-                    if let Ok(_sb) = ud.borrow::<SpriteBuffer>() {
-                        tracing::debug!("Submitting sprites (typed)");
-                        Ok(())
-                    } else {
-                        Err(mlua::Error::RuntimeError("ARG_ERROR: submit_sprites expects SpriteBuffer".into()))
+        let sprite_func = lua
+            .create_function(|_, v: Value| {
+                match v {
+                    Value::UserData(ud) => {
+                        if let Ok(_sb) = ud.borrow::<SpriteBuffer>() {
+                            tracing::debug!("Submitting sprites (typed)");
+                            Ok(())
+                        } else {
+                            Err(mlua::Error::RuntimeError(
+                                "ARG_ERROR: submit_sprites expects SpriteBuffer".into(),
+                            ))
+                        }
                     }
+                    _ => Err(mlua::Error::RuntimeError(
+                        "ARG_ERROR: submit_sprites expects SpriteBuffer".into(),
+                    )),
                 }
-                _ => Err(mlua::Error::RuntimeError("ARG_ERROR: submit_sprites expects SpriteBuffer".into())),
-            }
-        }) {
-            Ok(func) => func,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create submit_sprites: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = engine_table.set("submit_sprites", sprite_func) {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set submit_sprites: {}",
-                e
-            )));
-        }
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("submit_sprites", sprite_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Frame builder façade: engine.frame_builder(T, S) -> builder
         let fb_ctor = lua
@@ -319,37 +261,21 @@ impl EngineApi {
                 let ud = lua.create_userdata(fb)?;
                 Ok(ud)
             })
-            .map_err(|e| anyhow::Error::msg(format!("Failed to create frame_builder: {}", e)))?;
-        engine_table
-            .set("frame_builder", fb_ctor)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to set frame_builder: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("frame_builder", fb_ctor).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Input system
-        let input_func = match lua.create_function(|_, ()| Ok(InputSnapshot::new())) {
-            Ok(func) => func,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create get_input: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = engine_table.set("get_input", input_func) {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set get_input: {}",
-                e
-            )));
-        }
+        let input_func = lua
+            .create_function(|_, ()| Ok(InputSnapshot::new()))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("get_input", input_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Time system
         let fixed_time = self.fixed_time.clone();
-        let time_func = match lua.create_function(move |_, ()| Ok(*fixed_time.borrow())) {
-            Ok(func) => func,
-            Err(e) => return Err(anyhow::Error::msg(format!("Failed to create time: {}", e))),
-        };
-        if let Err(e) = engine_table.set("time", time_func) {
-            return Err(anyhow::Error::msg(format!("Failed to set time: {}", e)));
-        }
+        let time_func = lua
+            .create_function(move |_, ()| Ok(*fixed_time.borrow()))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("time", time_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Units helper (pixels per unit)
         let ppu_ref = self.pixels_per_unit.clone();
@@ -363,16 +289,12 @@ impl EngineApi {
                 *ppu_ref.borrow_mut() = n;
                 Ok(())
             })
-            .map_err(|e| anyhow::Error::msg(format!("Failed to create set_pixels_per_unit: {}", e)))?;
-        let units_tbl = lua
-            .create_table()
-            .map_err(|e| anyhow::Error::msg(format!("Failed to create units table: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let units_tbl = lua.create_table().map_err(|e| anyhow::anyhow!(e.to_string()))?;
         units_tbl
             .set("set_pixels_per_unit", set_ppu)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to set units fn: {}", e)))?;
-        engine_table
-            .set("units", units_tbl)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to set units: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("units", units_tbl).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Deterministic RNG: seed(n), random()
         let rng_seed = self.rng_state.clone();
@@ -381,17 +303,17 @@ impl EngineApi {
                 *rng_seed.borrow_mut() = if n == 0 { 0x9E3779B97F4A7C15 } else { n };
                 Ok(())
             })
-            .map_err(|e| anyhow::Error::msg(format!("Failed to create seed: {}", e)))?;
-        engine_table
-            .set("seed", seed_func)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to set seed: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("seed", seed_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         let rng_state = self.rng_state.clone();
         let rand_func = lua
             .create_function(move |_, ()| {
                 // xorshift64*
                 let mut x = *rng_state.borrow();
-                if x == 0 { x = 0x9E3779B97F4A7C15; }
+                if x == 0 {
+                    x = 0x9E3779B97F4A7C15;
+                }
                 x ^= x >> 12;
                 x ^= x << 25;
                 x ^= x >> 27;
@@ -401,125 +323,107 @@ impl EngineApi {
                 let val = (result >> 11) as f64 / (1u64 << 53) as f64;
                 Ok(val)
             })
-            .map_err(|e| anyhow::Error::msg(format!("Failed to create random: {}", e)))?;
-        engine_table
-            .set("random", rand_func)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to set random: {}", e)))?;
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("random", rand_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Persistence system
         let store_ref = self.persistence_store.clone();
-        let persist_func = match lua.create_function(move |_, (key, value): (String, Value)| {
-            tracing::debug!("Persisting key: {}", key);
-            store_ref.borrow_mut().insert(key, value);
-            Ok(())
-        }) {
-            Ok(func) => func,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create persist: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = engine_table.set("persist", persist_func) {
-            return Err(anyhow::Error::msg(format!("Failed to set persist: {}", e)));
-        }
+        let persist_func = lua
+            .create_function(move |_, (key, value): (String, Value)| {
+                tracing::debug!("Persisting key: {}", key);
+                store_ref.borrow_mut().insert(key, value);
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("persist", persist_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         let store_ref2 = self.persistence_store.clone();
-        let restore_func = match lua.create_function(move |_, key: String| {
-            tracing::debug!("Restoring key: {}", key);
-            if let Some(v) = store_ref2.borrow().get(&key) {
-                Ok(v.clone())
-            } else {
-                Ok(Value::Nil)
-            }
-        }) {
-            Ok(func) => func,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create restore: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = engine_table.set("restore", restore_func) {
-            return Err(anyhow::Error::msg(format!("Failed to set restore: {}", e)));
-        }
+        let restore_func = lua
+            .create_function(move |_, key: String| {
+                tracing::debug!("Restoring key: {}", key);
+                if let Some(v) = store_ref2.borrow().get(&key) {
+                    Ok(v.clone())
+                } else {
+                    Ok(Value::Nil)
+                }
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("restore", restore_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Logging system (rate-limited 30 msgs/sec)
         let fixed_time_for_log = self.fixed_time.clone();
         let log_rl = self.log_rl.clone();
-        let log_func = match lua.create_function(move |_, (level, message): (String, String)| {
-            let now = *fixed_time_for_log.borrow();
-            let mut rl = log_rl.borrow_mut();
-            if now - rl.0 >= 1.0 { rl.0 = now; rl.1 = 0; }
-            if rl.1 < 30 {
-                rl.1 += 1;
-                match level.as_str() {
-                    "info" => tracing::info!("[Lua] {}", message),
-                    "warn" => tracing::warn!("[Lua] {}", message),
-                    "error" => tracing::error!("[Lua] {}", message),
-                    "debug" => tracing::debug!("[Lua] {}", message),
-                    _ => tracing::info!("[Lua] {}", message),
+        let log_func = lua
+            .create_function(move |_, (level, message): (String, String)| {
+                let now = *fixed_time_for_log.borrow();
+                let mut rl = log_rl.borrow_mut();
+                if now - rl.0 >= 1.0 {
+                    rl.0 = now;
+                    rl.1 = 0;
                 }
-            }
-            Ok(())
-        }) {
-            Ok(func) => func,
-            Err(e) => return Err(anyhow::Error::msg(format!("Failed to create log: {}", e))),
-        };
-        if let Err(e) = engine_table.set("log", log_func) {
-            return Err(anyhow::Error::msg(format!("Failed to set log: {}", e)));
-        }
+                if rl.1 < 30 {
+                    rl.1 += 1;
+                    match level.as_str() {
+                        "info" => tracing::info!("[Lua] {}", message),
+                        "warn" => tracing::warn!("[Lua] {}", message),
+                        "error" => tracing::error!("[Lua] {}", message),
+                        "debug" => tracing::debug!("[Lua] {}", message),
+                        _ => tracing::info!("[Lua] {}", message),
+                    }
+                }
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("log", log_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        // --- Dummy implementations for base API ---
 
         // Metrics access
-        let metrics_func = match lua.create_function(|lua, ()| {
-            let metrics_table = lua.create_table()?;
-            metrics_table.set("cpu_frame_ms", 0.0)?;
-            metrics_table.set("ffi_calls", 0)?;
-            metrics_table.set("sprites_submitted", 0)?;
-            Ok(metrics_table)
-        }) {
-            Ok(func) => func,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create get_metrics: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = engine_table.set("get_metrics", metrics_func) {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set get_metrics: {}",
-                e
-            )));
-        }
+        let metrics_func = lua
+            .create_function(|lua, ()| {
+                let metrics_table = lua.create_table()?;
+                metrics_table.set("cpu_frame_ms", 0.0)?;
+                metrics_table.set("ffi_calls", 0)?;
+                metrics_table.set("sprites_submitted", 0)?;
+                Ok(metrics_table)
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("get_metrics", metrics_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        // Window size
+        let ws_func = lua.create_function(|_, ()| Ok((0, 0))).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("window_size", ws_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        // HUD printf
+        let hud_fn = lua.create_function(|_, _: String| Ok(())).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("hud_printf", hud_fn).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        // Clear color
+        let set_clear_color_fn =
+            lua.create_function(|_, _: mlua::Variadic<mlua::Value>| Ok(())).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("set_clear_color", set_clear_color_fn)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        // Render resolution
+        let set_render_fn = lua.create_function(|_, _: String| Ok(())).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("set_render_resolution", set_render_fn)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        // Atlas load
+        let atlas_func = lua
+            .create_function(|_, _: (String, String)| Ok(Value::Nil))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table.set("atlas_load", atlas_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Lock the engine table metatable
-        let metatable = match lua.create_table() {
-            Ok(table) => table,
-            Err(e) => {
-                return Err(anyhow::Error::msg(format!(
-                    "Failed to create metatable: {}",
-                    e
-                )))
-            }
-        };
-        if let Err(e) = metatable.set("__metatable", "locked") {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set metatable: {}",
-                e
-            )));
-        }
+        let metatable = lua.create_table().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        metatable.set("__metatable", "locked").map_err(|e| anyhow::anyhow!(e.to_string()))?;
         engine_table.set_metatable(Some(metatable));
 
         // Set engine namespace globally
-        if let Err(e) = globals.set("engine", engine_table) {
-            return Err(anyhow::Error::msg(format!(
-                "Failed to set engine global: {}",
-                e
-            )));
-        }
+        globals.set("engine", engine_table).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         tracing::info!("Engine API namespace initialized (version {})", API_VERSION);
         Ok(())

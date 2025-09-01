@@ -47,11 +47,17 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
   - `engine.get_input() -> snapshot` (methods: `get_key(name)`, `get_mouse_button(name)`, `mouse_pos()`)
   - Common key names: `KeyW`, `KeyS`, `ArrowUp`, `ArrowDown`
   - `engine.window_size() -> (w, h)`
+  - `engine.set_render_resolution(mode)` (`retro` or `hd`)
 - Persistence, metrics, HUD
   - `engine.persist(key, value)` / `engine.restore(key)` (in‑process KV)
   - `engine.get_metrics() -> { cpu_frame_ms, sprites_submitted, ffi_calls }`
   - `engine.hud_printf(msg)` prints a line on the HUD (rate‑limited)
   - `engine.log(level, msg)` (`info|warn|error|debug`, rate‑limited)
+
+### Rendering
+- `engine.set_render_resolution(mode)`: Sets the virtual canvas resolution. Supports two modes:
+  - `"retro"`: A 320x180 virtual canvas that is always integer-scaled to fit the window, preserving a pixel-perfect look.
+  - `"hd"`: A 1920x1080 virtual canvas. It will use integer scaling if the window is close (within 5%) to a multiple of 1080p (e.g., 4K). Otherwise, it uses linear filtering for smooth scaling.
 
 ### Minimal Script Skeleton
 ```lua

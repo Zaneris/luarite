@@ -47,7 +47,7 @@ pub struct SpriteInstance {
     pub texture_id: u32,
     pub position: Vec2,
     pub rotation: f32,
-    pub scale: Vec2,
+    pub size: Vec2,
     pub uv_rect: Vec4, // (u0, v0, u1, v1)
     pub color: Vec4,   // (r, g, b, a)
 }
@@ -58,7 +58,7 @@ pub struct Transform {
     pub entity_id: u32,
     pub position: Vec2,
     pub rotation: f32,
-    pub scale: Vec2,
+    pub size: Vec2,
 }
 
 /// Texture handle for the renderer
@@ -495,7 +495,7 @@ impl SpriteRenderer {
     pub fn set_transforms_v2(&mut self, transforms: &[f32]) -> Result<()> {
         if transforms.len() % 6 != 0 {
             return Err(anyhow::anyhow!(
-                "Transform array must have stride of 6 (id, x, y, rot, sx, sy)"
+                "Transform array must have stride of 6 (id, x, y, rot, w, h)"
             ));
         }
 
@@ -505,7 +505,7 @@ impl SpriteRenderer {
                 entity_id,
                 position: Vec2::new(chunk[1], chunk[2]),
                 rotation: chunk[3],
-                scale: Vec2::new(chunk[4], chunk[5]),
+                size: Vec2::new(chunk[4], chunk[5]),
             };
             self.transforms.insert(entity_id, transform);
         }
@@ -521,17 +521,17 @@ impl SpriteRenderer {
     }
 
     fn add_sprite_to_batch(&mut self, sprite: SpriteInstance, sprite_idx: usize) -> Result<()> {
-        let half_scale = sprite.scale * 0.5;
+        let half_size = sprite.size * 0.5;
 
         // Calculate sprite corners with rotation
         let cos_rot = sprite.rotation.cos();
         let sin_rot = sprite.rotation.sin();
 
         let corners = [
-            Vec2::new(-half_scale.x, -half_scale.y), // Top-left
-            Vec2::new(half_scale.x, -half_scale.y),  // Top-right
-            Vec2::new(half_scale.x, half_scale.y),   // Bottom-right
-            Vec2::new(-half_scale.x, half_scale.y),  // Bottom-left
+            Vec2::new(-half_size.x, -half_size.y), // Top-left
+            Vec2::new(half_size.x, -half_size.y),  // Top-right
+            Vec2::new(half_size.x, half_size.y),   // Bottom-right
+            Vec2::new(-half_size.x, half_size.y),  // Bottom-left
         ];
 
         let uvs = [
@@ -852,7 +852,7 @@ impl SpriteRenderer {
                         texture_id: sd.texture_id,
                         position: transform.position,
                         rotation: transform.rotation,
-                        scale: transform.scale, // Use direct virtual canvas coordinates
+                        size: transform.size, // Use direct pixel size
                         uv_rect: Vec4::new(sd.uv[0], sd.uv[1], sd.uv[2], sd.uv[3]),
                         color: Vec4::new(sd.color[0], sd.color[1], sd.color[2], sd.color[3]),
                     };

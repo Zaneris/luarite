@@ -146,7 +146,7 @@ pub struct EngineApi {
     fixed_time: Rc<RefCell<f64>>, // shared with time() closure
     persistence_store: Rc<RefCell<HashMap<String, Value>>>,
     rng_state: Rc<RefCell<u64>>, // deterministic RNG
-    pixels_per_unit: Rc<RefCell<f64>>, // units helper
+    
     // Simple rate limiters (window start, count)
     log_rl: Rc<RefCell<(f64, u32)>>,
     hud_rl: Rc<RefCell<(f64, u32)>>,
@@ -162,7 +162,6 @@ impl EngineApi {
             fixed_time: Rc::new(RefCell::new(0.0)),
             persistence_store: Rc::new(RefCell::new(HashMap::new())),
             rng_state: Rc::new(RefCell::new(0x9E3779B97F4A7C15)),
-            pixels_per_unit: Rc::new(RefCell::new(64.0)),
             log_rl: Rc::new(RefCell::new((0.0, 0))),
             hud_rl: Rc::new(RefCell::new((0.0, 0))),
             capabilities: EngineCapabilities::default(), // TODO: will be used for capability queries
@@ -181,9 +180,8 @@ impl EngineApi {
 
         // Constructors: typed buffers
         {
-            let ppu = self.pixels_per_unit.clone();
             let tb_ctor = lua
-                .create_function(move |_, cap: usize| Ok(TransformBuffer::new(cap, ppu.clone())))
+                .create_function(move |_, cap: usize| Ok(TransformBuffer::new(cap)))
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             engine_table
                 .set("create_transform_buffer", tb_ctor)
@@ -305,24 +303,7 @@ impl EngineApi {
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         engine_table.set("time", time_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-        // Units helper (pixels per unit)
-        let ppu_ref = self.pixels_per_unit.clone();
-        let set_ppu = lua
-            .create_function(move |_, n: f64| {
-                if n <= 0.0 {
-                    return Err(mlua::Error::RuntimeError(
-                        "pixels_per_unit must be > 0".into(),
-                    ));
-                }
-                *ppu_ref.borrow_mut() = n;
-                Ok(())
-            })
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        let units_tbl = lua.create_table().map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        units_tbl
-            .set("set_pixels_per_unit", set_ppu)
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("units", units_tbl).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        
 
         // Deterministic RNG: seed(n), random()
         let rng_seed = self.rng_state.clone();
@@ -471,14 +452,13 @@ pub struct TransformBuffer {
     buf: Rc<RefCell<Vec<f32>>>,
     len: Rc<RefCell<usize>>, // active rows
     cap: Rc<RefCell<usize>>, // capacity in rows
-    ppu: Rc<RefCell<f64>>,   // pixels per unit
 }
 
 impl TransformBuffer {
-    fn new(capacity: usize, ppu: Rc<RefCell<f64>>) -> Self {
+    fn new(capacity: usize) -> Self {
         let mut v = Vec::with_capacity(capacity * 6);
         v.resize(capacity * 6, 0.0);
-        Self { buf: Rc::new(RefCell::new(v)), len: Rc::new(RefCell::new(0)), cap: Rc::new(RefCell::new(capacity)), ppu }
+        Self { buf: Rc::new(RefCell::new(v)), len: Rc::new(RefCell::new(0)), cap: Rc::new(RefCell::new(capacity)) }
     }
 }
 
@@ -581,32 +561,15 @@ impl UserData for Atlas {
 }
 impl UserData for TransformBuffer {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("set", |lua, this, (i, id, x, y, rot, sx, sy): (usize, Value, f64, f64, f64, f64, f64)| {
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            // id may be EntityId or number
-            let entity_id = match id {
-                Value::UserData(ud) => {
-                    if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f32 } else { return Err(mlua::Error::RuntimeError("id must be EntityId or number".into())); }
-                }
-                v => f64::from_lua(v, lua)? as f32,
-            };
-            let off = idx * 6; let mut b = this.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x as f32; b[off+2]=y as f32; b[off+3]=rot as f32; b[off+4]=sx as f32; b[off+5]=sy as f32;
-            let mut l = this.len.borrow_mut(); if i > *l { *l = i; }
-            Ok(())
-        });
-        methods.add_method_mut("set_px", |lua, this, (i, id, x_px, y_px, rot, w_px, h_px): (usize, Value, f64, f64, f64, f64, f64)| {
+        methods.add_method_mut("set", |lua, this, (i, id, x, y, rot, w, h): (usize, Value, f64, f64, f64, f64, f64)| {
             let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
             let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
             let entity_id = match id {
                 Value::UserData(ud) => { if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f32 } else { return Err(mlua::Error::RuntimeError("id must be EntityId or number".into())); } }
                 v => f64::from_lua(v, lua)? as f32,
             };
-            let ppu = *this.ppu.borrow();
-            let sx = (w_px / ppu) as f32; let sy = (h_px / ppu) as f32;
             let off = idx * 6; let mut b = this.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x_px as f32; b[off+2]=y_px as f32; b[off+3]=rot as f32; b[off+4]=sx; b[off+5]=sy;
+            b[off+0]=entity_id; b[off+1]=x as f32; b[off+2]=y as f32; b[off+3]=rot as f32; b[off+4]=w as f32; b[off+5]=h as f32;
             let mut l = this.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
@@ -1027,27 +990,14 @@ impl FrameBuilder {
 impl UserData for FrameBuilder {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         // Raw-units transform
-        methods.add_method_mut("transform", |lua, this, (i, id_ud, x, y, rot, sx, sy): (usize, AnyUserData, f64, f64, f64, f64, f64)| {
+        methods.add_method_mut("transform", |lua, this, (i, id_ud, x, y, rot, w, h): (usize, AnyUserData, f64, f64, f64, f64, f64)| {
             let t_ud: AnyUserData = lua.registry_value(&this.t_key)?;
             let tb = t_ud.borrow::<TransformBuffer>()?;
             let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
             let cap = *tb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
             let entity_id = id_ud.borrow::<EntityId>()?.0 as f32;
             let off = idx * 6; let mut b = tb.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x as f32; b[off+2]=y as f32; b[off+3]=rot as f32; b[off+4]=sx as f32; b[off+5]=sy as f32;
-            let mut l = tb.len.borrow_mut(); if i > *l { *l = i; }
-            Ok(())
-        });
-        methods.add_method_mut("transform_px", |lua, this, (i, id_ud, x_px, y_px, rot, w_px, h_px): (usize, AnyUserData, f64, f64, f64, f64, f64)| {
-            let t_ud: AnyUserData = lua.registry_value(&this.t_key)?;
-            let tb = t_ud.borrow::<TransformBuffer>()?;
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *tb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let entity_id = id_ud.borrow::<EntityId>()?.0 as f32;
-            let ppu = *tb.ppu.borrow();
-            let sx = (w_px / ppu) as f32; let sy = (h_px / ppu) as f32;
-            let off = idx * 6; let mut b = tb.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x_px as f32; b[off+2]=y_px as f32; b[off+3]=rot as f32; b[off+4]=sx; b[off+5]=sy;
+            b[off+0]=entity_id; b[off+1]=x as f32; b[off+2]=y as f32; b[off+3]=rot as f32; b[off+4]=w as f32; b[off+5]=h as f32;
             let mut l = tb.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });

@@ -28,7 +28,8 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
   - Optional (planned hot‑reload): `function on_reload(old_env)`
 
 ### Coordinate System
-- Y‑up: origin at bottom, +Y up; positions/scales in pixels. A scale of `1.0` maps to ~64 px.
+- Y‑up: origin at bottom-left, +Y is up.
+- All coordinates and dimensions supplied to `set_px` or `transform_px` are in pixels relative to the virtual canvas resolution (e.g., 320x180 for `retro` mode).
 
 ### Engine API (essentials)
 - Entities & textures
@@ -39,9 +40,7 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
     - `local T = engine.create_transform_buffer(cap)` with `T:set(i, id, x, y, rot, sx, sy)` or `T:set_px(i, id, x_px, y_px, rot, w_px, h_px)`; submit via `engine.set_transforms(T)`.
     - `local S = engine.create_sprite_buffer(cap)` with `S:set(i, id, tex, u0, v0, u1, v1, r, g, b, a)`, `S:set_tex`, `S:set_uv_rect`, `S:set_color`, `S:set_named_uv(i, atlas, name)`; submit via `engine.submit_sprites(S)`.
     - Optional builder: `local fb = engine.frame_builder(T, S)` then `fb:transform(i, id, x,y,rot,sx,sy)`, `fb:transform_px(i, id, x_px,y_px,rot,w_px,h_px)`, `fb:sprite_uv(i, id, u0,v0,u1,v1)`, `fb:sprite_tex(i, id, tex, u0,v0,u1,v1, r,g,b,a)`, `fb:sprite_named(i, id, atlas, name, r,g,b,a)`, `fb:sprite_color(i, r,g,b,a)`, and finalize with `fb:commit()`.
-  - Legacy v2 arrays: still supported
-    - `engine.set_transforms(arr)` stride=6: `id, x, y, rot, sx, sy`
-    - `engine.submit_sprites(arr)` stride=10: `id, tex, u0, v0, u1, v1, r, g, b, a`
+  
 - Time, input, window
   - `engine.time() -> seconds` (fixed‑step time)
   - `engine.get_input() -> snapshot` (methods: `get_key(name)`, `was_key_pressed(name)`, `was_key_released(name)`, `get_mouse_button(name)`, `was_mouse_button_pressed(name)`, `was_mouse_button_released(name)`, `mouse_pos()`)
@@ -69,24 +68,22 @@ function on_start()
   engine.set_render_resolution("retro")
   e = engine.create_entity()
   tex = engine.load_texture("assets/atlas.png")
-  engine.units.set_pixels_per_unit(64)
   T = engine.create_transform_buffer(1)
   S = engine.create_sprite_buffer(1)
-  T:set_px(1, e, 100, 100, 0.0, 64, 64)
+  T:set(1, e, 100, 100, 0.0, 64, 64)
   fb = engine.frame_builder(T, S)
   fb:sprite_tex(1, e, tex, 0.0,0.0,1.0,1.0, 1.0,1.0,1.0,1.0)
 end
 
 function on_update(dt)
   -- move +Y each frame and submit once
-  fb:transform_px(1, e, 100, 100 + 60*dt, 0.0, 64, 64)
+  fb:transform(1, e, 100, 100 + 60*dt, 0.0, 64, 64)
   fb:commit()
 end
 ```
 ### Atlas + Builder Example
 ```lua
 assert(engine.api_version == 1)
-engine.units.set_pixels_per_unit(64)
 
 local e = engine.create_entity()
 local atlas = engine.atlas_load("assets/atlas.png", "assets/atlas.json")
@@ -98,12 +95,12 @@ local fb = engine.frame_builder(T, S)
 
 function on_start()
   engine.set_render_resolution("hd")
-  fb:transform_px(1, e, 200, 120, 0.0, 64, 64)
+  fb:transform(1, e, 200, 120, 0.0, 64, 64)
   if atlas then fb:sprite_named(1, e, atlas, "ball", 1,1,1,1) else fb:sprite_tex(1, e, tex, 0,0,1,1, 1,1,1,1) end
 end
 
 function on_update(dt)
-  fb:transform_px(1, e, 200 + math.sin(engine.time())*50, 120, 0.0, 64, 64)
+  fb:transform(1, e, 200 + math.sin(engine.time())*50, 120, 0.0, 64, 64)
   fb:commit()
 end
 ```
@@ -112,8 +109,7 @@ end
 
 ### TransformBuffer
 - create: `engine.create_transform_buffer(cap)`
-- set: `T:set(i, entity|id, x, y, rot, sx, sy)`
-- set_px: `T:set_px(i, entity|id, x_px, y_px, rot, w_px, h_px)`
+- set: `T:set(i, entity|id, x, y, rot, w, h)`
 - info: `T:len()`, `T:cap()`, `T:resize(new_cap)`
 
 ### SpriteBuffer
@@ -127,8 +123,7 @@ end
 
 ### FrameBuilder
 - create: `engine.frame_builder(T, S)`
-- transform: `fb:transform(i, entity, x, y, rot, sx, sy)`
-- transform_px: `fb:transform_px(i, entity, x_px, y_px, rot, w_px, h_px)`
+- transform: `fb:transform(i, entity, x, y, rot, w, h)`
 - sprite (UV): `fb:sprite_uv(i, entity, u0, v0, u1, v1)`
 - sprite (texture): `fb:sprite_tex(i, entity, tex, u0, v0, u1, v1, r, g, b, a)`
 - sprite (atlas): `fb:sprite_named(i, entity, atlas, name, r, g, b, a)`

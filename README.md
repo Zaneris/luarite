@@ -2,7 +2,7 @@
 
 Luarite is a compact, batched **2D game engine** with a **Rust** core and a **sandboxed Lua 5.4** scripting layer. It’s built for **predictable performance** and **developer ergonomics**: a tiny, stable API; **typed buffers** for transforms and sprites; one-shot batched submission each frame; and guardrails for **safety**, **determinism**, and **zero steady-state allocations**.
 
-The renderer targets a **virtual canvas** so projects look consistent on any display. Author at HD/4K and scale with letterboxing, or switch to **pixel-perfect integer scaling** with point sampling for a retro look—while UI/text remain razor sharp. Under the hood it uses `winit` for window/input, `wgpu` for cross-API rendering, `glam` for math, and `tracing` for structured logs plus a built-in HUD (FPS, p99, sprites, FFI).
+The renderer targets a **virtual canvas** so projects look consistent on any display. Author in HD and scale with letterboxing, or switch to **pixel-perfect integer scaling** with point sampling for a retro look—while UI/text remain razor sharp. Under the hood it uses `winit` for window/input, `wgpu` for cross-API rendering, `glam` for math, and `tracing` for structured logs plus a built-in HUD (FPS, p99, sprites, FFI).
 
 Luarite is intentionally minimal: **Y-up** coordinates, f32 transforms, sprite atlases, and a narrow FFI surface designed around **handles and batches**. It includes **hot-reload**, **record/replay** for deterministic debugging, and an **offscreen renderer** for GPU-free end-to-end tests.
 

@@ -36,18 +36,22 @@ impl UserData for TextureHandle {
 #[derive(Debug, Clone)]
 pub struct InputSnapshot {
     pub keys: HashMap<String, bool>,
+    pub prev_keys: HashMap<String, bool>,
     pub mouse_x: f64,
     pub mouse_y: f64,
     pub mouse_buttons: HashMap<String, bool>,
+    pub prev_mouse_buttons: HashMap<String, bool>,
 }
 
 impl InputSnapshot {
     pub fn new() -> Self {
         Self {
             keys: HashMap::new(),
+            prev_keys: HashMap::new(),
             mouse_x: 0.0,
             mouse_y: 0.0,
             mouse_buttons: HashMap::new(),
+            prev_mouse_buttons: HashMap::new(),
         }
     }
 }
@@ -64,8 +68,32 @@ impl UserData for InputSnapshot {
             Ok(this.keys.get(&key).copied().unwrap_or(false))
         });
 
+        methods.add_method("was_key_pressed", |_, this, key: String| {
+            let is_down = this.keys.get(&key).copied().unwrap_or(false);
+            let was_down = this.prev_keys.get(&key).copied().unwrap_or(false);
+            Ok(is_down && !was_down)
+        });
+
+        methods.add_method("was_key_released", |_, this, key: String| {
+            let is_down = this.keys.get(&key).copied().unwrap_or(false);
+            let was_down = this.prev_keys.get(&key).copied().unwrap_or(false);
+            Ok(!is_down && was_down)
+        });
+
         methods.add_method("get_mouse_button", |_, this, button: String| {
             Ok(this.mouse_buttons.get(&button).copied().unwrap_or(false))
+        });
+
+        methods.add_method("was_mouse_button_pressed", |_, this, button: String| {
+            let is_down = this.mouse_buttons.get(&button).copied().unwrap_or(false);
+            let was_down = this.prev_mouse_buttons.get(&button).copied().unwrap_or(false);
+            Ok(is_down && !was_down)
+        });
+
+        methods.add_method("was_mouse_button_released", |_, this, button: String| {
+            let is_down = this.mouse_buttons.get(&button).copied().unwrap_or(false);
+            let was_down = this.prev_mouse_buttons.get(&button).copied().unwrap_or(false);
+            Ok(!is_down && was_down)
         });
 
         methods.add_method("mouse_pos", |_, this, ()| Ok((this.mouse_x, this.mouse_y)));

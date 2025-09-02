@@ -30,8 +30,8 @@ local fb
 
 local function reset_ball()
   bx, by = w*0.5, h*0.5
-  local dirx = (math.random() < 0.5) and -1 or 1
-  local diry = (math.random() < 0.5) and -1 or 1
+  local dirx = engine.random_bool() and -1 or 1
+  local diry = engine.random_bool() and -1 or 1
   vx, vy = dirx*BASE_VX, diry*BASE_VY
 end
 

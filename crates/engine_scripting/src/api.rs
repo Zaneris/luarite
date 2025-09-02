@@ -335,6 +335,52 @@ impl EngineApi {
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         engine_table.set("random", rand_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
+        // Add random_bool(p)
+        let rng_state_bool = self.rng_state.clone();
+        let rand_bool_func = lua
+            .create_function(move |_, p: Option<f64>| {
+                // xorshift64*
+                let mut x = *rng_state_bool.borrow();
+                if x == 0 {
+                    x = 0x9E3779B97F4A7C15;
+                }
+                x ^= x >> 12;
+                x ^= x << 25;
+                x ^= x >> 27;
+                let result = x.wrapping_mul(0x2545F4914F6CDD1D);
+                *rng_state_bool.borrow_mut() = x;
+                // map to [0,1)
+                let val = (result >> 11) as f64 / (1u64 << 53) as f64;
+                Ok(val < p.unwrap_or(0.5))
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("random_bool", rand_bool_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        // Add random_range(min, max)
+        let rng_state_range = self.rng_state.clone();
+        let rand_range_func = lua
+            .create_function(move |_, (min, max): (f64, f64)| {
+                // xorshift64*
+                let mut x = *rng_state_range.borrow();
+                if x == 0 {
+                    x = 0x9E3779B97F4A7C15;
+                }
+                x ^= x >> 12;
+                x ^= x << 25;
+                x ^= x >> 27;
+                let result = x.wrapping_mul(0x2545F4914F6CDD1D);
+                *rng_state_range.borrow_mut() = x;
+                // map to [0,1)
+                let val = (result >> 11) as f64 / (1u64 << 53) as f64;
+                Ok(min + val * (max - min))
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("random_range", rand_range_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
         // Persistence system
         let store_ref = self.persistence_store.clone();
         let persist_func = lua

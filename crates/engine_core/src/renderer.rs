@@ -451,6 +451,8 @@ impl SpriteRenderer {
 
         let mut textures = Vec::with_capacity(1000); // Match max_textures capability
         textures.resize_with(1000, || None);
+        let mut texture_bind_groups = Vec::with_capacity(1000);
+        texture_bind_groups.resize_with(1000, || None);
 
         // Common samplers used for presenting the virtual scene
         let nearest_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -490,7 +492,7 @@ impl SpriteRenderer {
             sprite_vertices: Vec::with_capacity(max_sprites as usize * 4),
             sprite_indices: Vec::with_capacity(max_sprites as usize * 6),
             textures,
-            texture_bind_groups: Vec::new(),
+            texture_bind_groups,
             white_texture,
             batches: Vec::with_capacity(64),
             last_draw_calls: 0,

@@ -172,18 +172,12 @@ impl ApplicationHandler for EngineWindow {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 use winit::event::ElementState;
-                use winit::keyboard::{Key, PhysicalKey};
-                let down = matches!(event.state, ElementState::Pressed);
-                let key_name = match event.physical_key {
-                    PhysicalKey::Code(code) => format!("{:?}", code),
-                    PhysicalKey::Unidentified(_) => match &event.logical_key {
-                        Key::Named(n) => format!("{:?}", n),
-                        Key::Character(s) => s.to_string(),
-                        _ => "Unknown".to_string(),
-                    },
-                };
-                if let Ok(mut input) = self.input.lock() {
-                    input.set_key(key_name, down);
+                use winit::keyboard::PhysicalKey;
+                if let PhysicalKey::Code(keycode) = event.physical_key {
+                    let down = matches!(event.state, ElementState::Pressed);
+                    if let Ok(mut input) = self.input.lock() {
+                        input.set_key(keycode as u32, down);
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {

@@ -49,10 +49,15 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
   
 - Time, input, window
   - `engine.time() -> seconds` (fixed‑step time)
-  - `engine.get_input() -> snapshot` (methods: `get_key(name)`, `was_key_pressed(name)`, `was_key_released(name)`, `get_mouse_button(name)`, `was_mouse_button_pressed(name)`, `was_mouse_button_released(name)`, `mouse_pos()`)
-  - Common key names: `KeyW`, `KeyS`, `ArrowUp`, `ArrowDown`
+  - `engine.get_input() -> snapshot` (methods: `down(key)`, `pressed(key)`, `released(key)`, `mouse_pos()`)
+  - `engine.keys` is a table of keycodes, e.g. `engine.keys.KeyW`, `engine.keys.ArrowUp`.
   - `engine.window_size() -> (w, h)`
   - `engine.set_render_resolution(mode)` (`retro` or `hd`)
+- RNG (deterministic)
+  - `engine.seed(n)` seeds the RNG. `math.random` is automatically shimmed to use this RNG.
+  - `engine.random() -> n` returns a float `0 <= n < 1`.
+  - `engine.random_bool(p=0.5) -> bool` returns true with probability `p`.
+  - `engine.random_range(min, max) -> n` returns a float between min and max.
 - Persistence, metrics, HUD
   - `engine.persist(key, value)` / `engine.restore(key)` (in‑process KV)
   - `engine.get_metrics() -> { cpu_frame_ms, sprites_submitted, ffi_calls }`
@@ -68,6 +73,7 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
 ```lua
 assert(engine.api_version == 1)
 
+local K = engine.keys
 local T, S, e, tex, fb
 
 function on_start()
@@ -76,15 +82,21 @@ function on_start()
   tex = engine.load_texture("assets/atlas.png")
   T = engine.create_transform_buffer(1)
   S = engine.create_sprite_buffer(1)
-  T:set(1, e, 100, 100, 0.0, 64, 64)
+  T:set(1, e, 100, 100, 0.0, 32, 32)
   fb = engine.frame_builder(T, S)
   fb:sprite_tex(1, e, tex, 0.0,0.0,1.0,1.0, 1.0,1.0,1.0,1.0)
+  fb:commit() -- commit once to make sprite visible
 end
 
 function on_update(dt)
-  -- move +Y each frame and submit once
-  fb:transform(1, e, 100, 100 + 60*dt, 0.0, 64, 64)
-  fb:commit()
+  local inp = engine.get_input()
+  if inp:pressed(K.Space) then
+    -- Every spacebar press, move to random location
+    local x = engine.random_range(32, 320-32)
+    local y = engine.random_range(32, 180-32)
+    T:set(1, e, x, y, 0.0, 32, 32)
+    fb:commit()
+  end
 end
 ```
 ### Atlas + Builder Example
@@ -137,9 +149,10 @@ end
 - commit: `fb:commit()`
 
 ### Input
-- `snapshot:get_key(name) -> bool`
-- `snapshot:was_key_pressed(name) -> bool`
-- `snapshot:was_key_released(name) -> bool`
+- `engine.keys` is a table of keycodes. Use `K = engine.keys` for convenience.
+- `snapshot:down(K.KeyW) -> bool` (is key currently down?)
+- `snapshot:pressed(K.KeyW) -> bool` (was key pressed this frame?)
+- `snapshot:released(K.KeyW) -> bool` (was key released this frame?)
 - `snapshot:get_mouse_button(name) -> bool`
 - `snapshot:was_mouse_button_pressed(name) -> bool`
 - `snapshot:was_mouse_button_released(name) -> bool`

@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
 use std::io::BufRead;
+use winit::keyboard::KeyCode;
 
 fn main() -> Result<()> {
     // Parse simple CLI flags for record/replay
@@ -150,7 +151,7 @@ fn main() -> Result<()> {
             if let Ok(inp) = input_handle.lock() {
                 snap.mouse_x = inp.mouse_x;
                 snap.mouse_y = inp.mouse_y;
-                for k in inp.keys.iter() { snap.keys.insert(k.clone(), true); }
+                for k in inp.keys.iter() { snap.keys.insert(*k, true); }
                 for b in inp.mouse_buttons.iter() { snap.mouse_buttons.insert(b.clone(), true); }
             }
 
@@ -255,7 +256,7 @@ fn main() -> Result<()> {
 
             // Manual reload on 'R'
             if let Ok(inp) = window_input_for_reload.lock() {
-                let is_down = inp.keys.contains("KeyR");
+                let is_down = inp.keys.contains(&(KeyCode::KeyR as u32));
                 if is_down && !reload_key_down {
                     if let Ok(src) = std::fs::read_to_string(SCRIPT_PATH) {
                         if let Err(e) = sandbox_for_reload.reload_script(&src, "game.lua") {
@@ -401,17 +402,17 @@ fn main() -> Result<()> {
             if let Some(f) = rec_file.as_mut() {
                 use std::io::Write;
                 // Snapshot exactly what scripts saw via engine.get_input()
-                let mut keys: Vec<String> = Vec::new();
+                let mut keys: Vec<u32> = Vec::new();
                 let mut btns: Vec<String> = Vec::new();
                 let mut mx = 0.0f64;
                 let mut my = 0.0f64;
                 if let Ok(snap) = last_used_for_write.lock() {
                     mx = snap.mouse_x; my = snap.mouse_y;
-                    for (k,v) in snap.keys.iter() { if *v { keys.push(k.clone()); } }
+                    for (k,v) in snap.keys.iter() { if *v { keys.push(*k); } }
                     for (b,v) in snap.mouse_buttons.iter() { if *v { btns.push(b.clone()); } }
                 }
                 keys.sort(); btns.sort();
-                let keys_s = keys.join("|");
+                let keys_s = keys.iter().map(|k| k.to_string()).collect::<Vec<String>>().join("|");
                 let btns_s = btns.join("|");
                 let _ = writeln!(f, "H {}\tK {}\tB {}\tMX {:.3}\tMY {:.3}", h64, keys_s, btns_s, mx, my);
             }
@@ -423,7 +424,7 @@ fn main() -> Result<()> {
                     for tok in line.split('\t') {
                         let tok = tok.trim();
                         if let Some(rest) = tok.strip_prefix("H ") { expected = rest.parse::<u64>().ok(); }
-                        else if let Some(rest) = tok.strip_prefix("K ") { for k in rest.split('|') { if !k.is_empty() { rs.keys.insert(k.to_string(), true); } } }
+                        else if let Some(rest) = tok.strip_prefix("K ") { for k_str in rest.split('|') { if !k_str.is_empty() { if let Ok(k) = k_str.parse::<u32>() { rs.keys.insert(k, true); } } } }
                         else if let Some(rest) = tok.strip_prefix("B ") { for b in rest.split('|') { if !b.is_empty() { rs.mouse_buttons.insert(b.to_string(), true); } } }
                         else if let Some(rest) = tok.strip_prefix("MX ") { rs.mouse_x = rest.parse::<f64>().unwrap_or(0.0); }
                         else if let Some(rest) = tok.strip_prefix("MY ") { rs.mouse_y = rest.parse::<f64>().unwrap_or(0.0); }

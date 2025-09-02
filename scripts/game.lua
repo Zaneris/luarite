@@ -2,6 +2,8 @@
 
 assert(engine.api_version == 1)
 
+local K = engine.keys
+
 -- Deterministic RNG for replay
 engine.seed(1337)
 
@@ -42,8 +44,8 @@ local function aabb_hit(cx, cy, hw, hh, x, y, s)
 end
 
 local function axis(inp, posKey, negKey)
-  local p = inp:get_key(posKey) and 1 or 0
-  local n = inp:get_key(negKey) and -1 or 0
+  local p = inp:down(posKey) and 1 or 0
+  local n = inp:down(negKey) and -1 or 0
   return p + n
 end
 
@@ -73,8 +75,8 @@ end
 
 function on_update(dt)
   local inp = engine.get_input()
-  local dyL = axis(inp, "KeyW", "KeyS")
-  local dyR = axis(inp, "ArrowUp", "ArrowDown")
+  local dyL = axis(inp, K.KeyW, K.KeyS)
+  local dyR = axis(inp, K.ArrowUp, K.ArrowDown)
 
   local phh = PADDLE_H*0.5
   py_l = math.min(math.max(py_l + dyL*SPEED_PADDLE*dt, phh), h - phh)

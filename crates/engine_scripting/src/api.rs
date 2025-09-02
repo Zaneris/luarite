@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use serde::Deserialize;
 use engine_core::state::SpriteData;
+use winit::keyboard::KeyCode;
 
 /// Current engine API version
 pub const API_VERSION: u32 = 1;
@@ -35,8 +36,8 @@ impl UserData for TextureHandle {
 /// Input snapshot structure for deterministic input
 #[derive(Debug, Clone)]
 pub struct InputSnapshot {
-    pub keys: HashMap<String, bool>,
-    pub prev_keys: HashMap<String, bool>,
+    pub keys: HashMap<u32, bool>,
+    pub prev_keys: HashMap<u32, bool>,
     pub mouse_x: f64,
     pub mouse_y: f64,
     pub mouse_buttons: HashMap<String, bool>,
@@ -64,22 +65,39 @@ impl Default for InputSnapshot {
 
 impl UserData for InputSnapshot {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method("get_key", |_, this, key: String| {
+        // --- Keyboard ---
+        methods.add_method("get_key", |_, this, key: u32| {
             Ok(this.keys.get(&key).copied().unwrap_or(false))
         });
 
-        methods.add_method("was_key_pressed", |_, this, key: String| {
+        methods.add_method("was_key_pressed", |_, this, key: u32| {
             let is_down = this.keys.get(&key).copied().unwrap_or(false);
             let was_down = this.prev_keys.get(&key).copied().unwrap_or(false);
             Ok(is_down && !was_down)
         });
 
-        methods.add_method("was_key_released", |_, this, key: String| {
+        methods.add_method("was_key_released", |_, this, key: u32| {
             let is_down = this.keys.get(&key).copied().unwrap_or(false);
             let was_down = this.prev_keys.get(&key).copied().unwrap_or(false);
             Ok(!is_down && was_down)
         });
 
+        // Aliases
+        methods.add_method("down", |_, this, key: u32| {
+            Ok(this.keys.get(&key).copied().unwrap_or(false))
+        });
+        methods.add_method("pressed", |_, this, key: u32| {
+            let is_down = this.keys.get(&key).copied().unwrap_or(false);
+            let was_down = this.prev_keys.get(&key).copied().unwrap_or(false);
+            Ok(is_down && !was_down)
+        });
+        methods.add_method("released", |_, this, key: u32| {
+            let is_down = this.keys.get(&key).copied().unwrap_or(false);
+            let was_down = this.prev_keys.get(&key).copied().unwrap_or(false);
+            Ok(!is_down && was_down)
+        });
+
+        // --- Mouse ---
         methods.add_method("get_mouse_button", |_, this, button: String| {
             Ok(this.mouse_buttons.get(&button).copied().unwrap_or(false))
         });
@@ -139,6 +157,112 @@ impl UserData for EngineCapabilities {
     }
 }
 
+fn create_keys_table(lua: &Lua) -> Result<mlua::Table> {
+    let keys = lua.create_table()?;
+    keys.set("Backquote", KeyCode::Backquote as u32)?;
+    keys.set("Backslash", KeyCode::Backslash as u32)?;
+    keys.set("BracketLeft", KeyCode::BracketLeft as u32)?;
+    keys.set("BracketRight", KeyCode::BracketRight as u32)?;
+    keys.set("Comma", KeyCode::Comma as u32)?;
+    keys.set("Digit0", KeyCode::Digit0 as u32)?;
+    keys.set("Digit1", KeyCode::Digit1 as u32)?;
+    keys.set("Digit2", KeyCode::Digit2 as u32)?;
+    keys.set("Digit3", KeyCode::Digit3 as u32)?;
+    keys.set("Digit4", KeyCode::Digit4 as u32)?;
+    keys.set("Digit5", KeyCode::Digit5 as u32)?;
+    keys.set("Digit6", KeyCode::Digit6 as u32)?;
+    keys.set("Digit7", KeyCode::Digit7 as u32)?;
+    keys.set("Digit8", KeyCode::Digit8 as u32)?;
+    keys.set("Digit9", KeyCode::Digit9 as u32)?;
+    keys.set("Equal", KeyCode::Equal as u32)?;
+    keys.set("IntlBackslash", KeyCode::IntlBackslash as u32)?;
+    keys.set("IntlRo", KeyCode::IntlRo as u32)?;
+    keys.set("IntlYen", KeyCode::IntlYen as u32)?;
+    keys.set("KeyA", KeyCode::KeyA as u32)?;
+    keys.set("KeyB", KeyCode::KeyB as u32)?;
+    keys.set("KeyC", KeyCode::KeyC as u32)?;
+    keys.set("KeyD", KeyCode::KeyD as u32)?;
+    keys.set("KeyE", KeyCode::KeyE as u32)?;
+    keys.set("KeyF", KeyCode::KeyF as u32)?;
+    keys.set("KeyG", KeyCode::KeyG as u32)?;
+    keys.set("KeyH", KeyCode::KeyH as u32)?;
+    keys.set("KeyI", KeyCode::KeyI as u32)?;
+    keys.set("KeyJ", KeyCode::KeyJ as u32)?;
+    keys.set("KeyK", KeyCode::KeyK as u32)?;
+    keys.set("KeyL", KeyCode::KeyL as u32)?;
+    keys.set("KeyM", KeyCode::KeyM as u32)?;
+    keys.set("KeyN", KeyCode::KeyN as u32)?;
+    keys.set("KeyO", KeyCode::KeyO as u32)?;
+    keys.set("KeyP", KeyCode::KeyP as u32)?;
+    keys.set("KeyQ", KeyCode::KeyQ as u32)?;
+    keys.set("KeyR", KeyCode::KeyR as u32)?;
+    keys.set("KeyS", KeyCode::KeyS as u32)?;
+    keys.set("KeyT", KeyCode::KeyT as u32)?;
+    keys.set("KeyU", KeyCode::KeyU as u32)?;
+    keys.set("KeyV", KeyCode::KeyV as u32)?;
+    keys.set("KeyW", KeyCode::KeyW as u32)?;
+    keys.set("KeyX", KeyCode::KeyX as u32)?;
+    keys.set("KeyY", KeyCode::KeyY as u32)?;
+    keys.set("KeyZ", KeyCode::KeyZ as u32)?;
+    keys.set("Minus", KeyCode::Minus as u32)?;
+    keys.set("Period", KeyCode::Period as u32)?;
+    keys.set("Quote", KeyCode::Quote as u32)?;
+    keys.set("Semicolon", KeyCode::Semicolon as u32)?;
+    keys.set("Slash", KeyCode::Slash as u32)?;
+    keys.set("AltLeft", KeyCode::AltLeft as u32)?;
+    keys.set("AltRight", KeyCode::AltRight as u32)?;
+    keys.set("Backspace", KeyCode::Backspace as u32)?;
+    keys.set("CapsLock", KeyCode::CapsLock as u32)?;
+    keys.set("ContextMenu", KeyCode::ContextMenu as u32)?;
+    keys.set("ControlLeft", KeyCode::ControlLeft as u32)?;
+    keys.set("ControlRight", KeyCode::ControlRight as u32)?;
+    keys.set("Enter", KeyCode::Enter as u32)?;
+    keys.set("SuperLeft", KeyCode::SuperLeft as u32)?;
+    keys.set("SuperRight", KeyCode::SuperRight as u32)?;
+    keys.set("ShiftLeft", KeyCode::ShiftLeft as u32)?;
+    keys.set("ShiftRight", KeyCode::ShiftRight as u32)?;
+    keys.set("Space", KeyCode::Space as u32)?;
+    keys.set("Tab", KeyCode::Tab as u32)?;
+    keys.set("ArrowDown", KeyCode::ArrowDown as u32)?;
+    keys.set("ArrowLeft", KeyCode::ArrowLeft as u32)?;
+    keys.set("ArrowRight", KeyCode::ArrowRight as u32)?;
+    keys.set("ArrowUp", KeyCode::ArrowUp as u32)?;
+    keys.set("End", KeyCode::End as u32)?;
+    keys.set("Home", KeyCode::Home as u32)?;
+    keys.set("PageDown", KeyCode::PageDown as u32)?;
+    keys.set("PageUp", KeyCode::PageUp as u32)?;
+    keys.set("F1", KeyCode::F1 as u32)?;
+    keys.set("F2", KeyCode::F2 as u32)?;
+    keys.set("F3", KeyCode::F3 as u32)?;
+    keys.set("F4", KeyCode::F4 as u32)?;
+    keys.set("F5", KeyCode::F5 as u32)?;
+    keys.set("F6", KeyCode::F6 as u32)?;
+    keys.set("F7", KeyCode::F7 as u32)?;
+    keys.set("F8", KeyCode::F8 as u32)?;
+    keys.set("F9", KeyCode::F9 as u32)?;
+    keys.set("F10", KeyCode::F10 as u32)?;
+    keys.set("F11", KeyCode::F11 as u32)?;
+    keys.set("F12", KeyCode::F12 as u32)?;
+    keys.set("Numpad0", KeyCode::Numpad0 as u32)?;
+    keys.set("Numpad1", KeyCode::Numpad1 as u32)?;
+    keys.set("Numpad2", KeyCode::Numpad2 as u32)?;
+    keys.set("Numpad3", KeyCode::Numpad3 as u32)?;
+    keys.set("Numpad4", KeyCode::Numpad4 as u32)?;
+    keys.set("Numpad5", KeyCode::Numpad5 as u32)?;
+    keys.set("Numpad6", KeyCode::Numpad6 as u32)?;
+    keys.set("Numpad7", KeyCode::Numpad7 as u32)?;
+    keys.set("Numpad8", KeyCode::Numpad8 as u32)?;
+    keys.set("Numpad9", KeyCode::Numpad9 as u32)?;
+    keys.set("NumpadAdd", KeyCode::NumpadAdd as u32)?;
+    keys.set("NumpadDecimal", KeyCode::NumpadDecimal as u32)?;
+    keys.set("NumpadDivide", KeyCode::NumpadDivide as u32)?;
+    keys.set("NumpadMultiply", KeyCode::NumpadMultiply as u32)?;
+    keys.set("NumpadSubtract", KeyCode::NumpadSubtract as u32)?;
+    keys.set("NumpadEnter", KeyCode::NumpadEnter as u32)?;
+    Ok(keys)
+}
+
+
 /// Main engine API struct
 pub struct EngineApi {
     next_entity_id: u32,
@@ -146,6 +270,7 @@ pub struct EngineApi {
     fixed_time: Rc<RefCell<f64>>, // shared with time() closure
     persistence_store: Rc<RefCell<HashMap<String, Value>>>,
     rng_state: Rc<RefCell<u64>>, // deterministic RNG
+    input: Rc<RefCell<InputSnapshot>>, // Shared input state
     
     // Simple rate limiters (window start, count)
     log_rl: Rc<RefCell<(f64, u32)>>,
@@ -162,6 +287,7 @@ impl EngineApi {
             fixed_time: Rc::new(RefCell::new(0.0)),
             persistence_store: Rc::new(RefCell::new(HashMap::new())),
             rng_state: Rc::new(RefCell::new(0x9E3779B97F4A7C15)),
+            input: Rc::new(RefCell::new(InputSnapshot::new())),
             log_rl: Rc::new(RefCell::new((0.0, 0))),
             hud_rl: Rc::new(RefCell::new((0.0, 0))),
             capabilities: EngineCapabilities::default(), // TODO: will be used for capability queries
@@ -177,6 +303,10 @@ impl EngineApi {
 
         // Create main engine table
         let engine_table = lua.create_table().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        // Key constants
+        let keys_table = create_keys_table(lua)?;
+        engine_table.set("keys", keys_table)?;
 
         // Constructors: typed buffers
         {
@@ -291,8 +421,9 @@ impl EngineApi {
         engine_table.set("frame_builder", fb_ctor).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Input system
+        let input_snapshot = self.input.clone();
         let input_func = lua
-            .create_function(|_, ()| Ok(InputSnapshot::new()))
+            .create_function(move |_, ()| Ok(input_snapshot.borrow().clone()))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         engine_table.set("get_input", input_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 

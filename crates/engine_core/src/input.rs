@@ -1,8 +1,9 @@
+#![allow(clippy::module_inception)]
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct InputState {
-    pub keys: HashSet<String>,
+    pub keys: HashSet<u32>,
     pub mouse_buttons: HashSet<String>,
     pub mouse_x: f64,
     pub mouse_y: f64,
@@ -25,11 +26,11 @@ impl InputState {
         self.mouse_y = y;
     }
 
-    pub fn set_key(&mut self, name: String, down: bool) {
+    pub fn set_key(&mut self, code: u32, down: bool) {
         if down {
-            self.keys.insert(name);
+            self.keys.insert(code);
         } else {
-            self.keys.remove(&name);
+            self.keys.remove(&code);
         }
     }
 

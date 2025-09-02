@@ -96,7 +96,7 @@ function on_update(dt)
   elseif bx > w + 20 then score_l = score_l + 1; reset_ball() end
 
   -- Fill transforms via builder and commit once
-  fb:transform(1, background, w*0.5, h*0.5, 0, w, h) -- Full 320x180 red background
+  fb:transform(1, background, w*0.5, h*0.5, 0, w, h) -- Full 320x180 gray background
   fb:transform(2, paddle_l, px_l, py_l, 0, PADDLE_W, PADDLE_H)
   fb:transform(3, paddle_r, px_r, py_r, 0, PADDLE_W, PADDLE_H)
   fb:transform(4, ball,     bx,   by,   0, BALL_SIZE, BALL_SIZE)

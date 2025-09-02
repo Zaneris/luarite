@@ -146,7 +146,7 @@ pub struct SpriteRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    surface: wgpu::Surface<'static>,
+    surface: Option<wgpu::Surface<'static>>,
     render_pipeline: wgpu::RenderPipeline,
 
     // Sprite batching resources
@@ -197,6 +197,53 @@ pub struct SpriteRenderer {
 }
 
 impl SpriteRenderer {
+    // Headless constructor for testing - no window/surface required
+    pub async fn new_headless(width: u32, height: u32) -> Result<Self> {
+        // Create wgpu instance
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            ..Default::default()
+        });
+
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Failed to find suitable GPU adapter"))?;
+
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("headless_device"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: wgpu::Limits::downlevel_defaults(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                },
+                None,
+            )
+            .await?;
+
+        // Use a standard format for headless rendering
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        
+        // Create a dummy config for headless mode
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
+        Self::new_common(device, queue, config, None).await
+    }
+
     pub async fn new(window: Arc<Window>) -> Result<Self> {
         let size = window.inner_size();
 
@@ -249,6 +296,16 @@ impl SpriteRenderer {
         };
 
         surface.configure(&device, &config);
+
+        Self::new_common(device, queue, config, Some(surface)).await
+    }
+
+    async fn new_common(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        config: wgpu::SurfaceConfiguration,
+        surface: Option<wgpu::Surface<'static>>,
+    ) -> Result<Self> {
 
         // Create white texture for solid color sprites
         let white_texture = Self::create_white_texture(&device, &queue)?;
@@ -463,7 +520,9 @@ impl SpriteRenderer {
         if new_size.width > 0 && new_size.height > 0 {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
+            if let Some(surface) = &self.surface {
+                surface.configure(&self.device, &self.config);
+            }
             self.update_projection_matrix();
         }
     }
@@ -572,7 +631,9 @@ impl SpriteRenderer {
     }
 
     pub fn render(&mut self) -> Result<()> {
-        let output = self.surface.get_current_texture()?;
+        let surface = self.surface.as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Cannot render to screen without a surface (use new() instead of new_headless())"))?;
+        let output = surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -811,6 +872,153 @@ impl SpriteRenderer {
         Ok(())
     }
 
+    // Headless rendering method - renders to virtual canvas and returns pixel data for testing
+    pub fn render_to_virtual_canvas(&mut self, engine_state: &crate::state::EngineState) -> Result<Vec<u8>> {
+        // Ensure scene texture exists for current virtual mode
+        self.ensure_scene_texture(engine_state)?;
+        
+        // Clear previous frame data
+        self.sprite_vertices.clear();
+        self.sprite_indices.clear();
+
+        // Update transforms and build sprite batches from engine state
+        self.update_from_engine_state(engine_state)?;
+
+        // Upload sprite vertex/index data if it exists
+        if !self.sprite_vertices.is_empty() {
+            self.queue.write_buffer(
+                &self.vertex_buffer,
+                0,
+                bytemuck::cast_slice(&self.sprite_vertices),
+            );
+            self.queue.write_buffer(
+                &self.index_buffer,
+                0,
+                bytemuck::cast_slice(&self.sprite_indices),
+            );
+        }
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("headless_render_encoder"),
+            });
+
+        // Only do the virtual pass - render sprites to the virtual canvas (offscreen texture)
+        if let Some(scene) = &self.scene_texture {
+            let (vw, vh) = self.virtual_size;
+            let projection_virtual =
+                Mat4::orthographic_lh(0.0, vw as f32, 0.0, vh as f32, -1000.0, 1000.0);
+            self.queue.write_buffer(
+                &self.uniform_buffer,
+                0,
+                bytemuck::cast_slice(&projection_virtual.to_cols_array()),
+            );
+
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("virtual_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &scene.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear({
+                            let cc = engine_state.get_clear_color();
+                            wgpu::Color { r: cc[0] as f64, g: cc[1] as f64, b: cc[2] as f64, a: cc[3] as f64 }
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+
+            if !self.sprite_vertices.is_empty() {
+                pass.set_pipeline(&self.render_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+
+                let white_bind_group =
+                    self.device
+                        .create_bind_group(&wgpu::BindGroupDescriptor {
+                            layout: &self.texture_bind_group_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(
+                                        &self.white_texture.view,
+                                    ),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(
+                                        &self.white_texture.sampler,
+                                    ),
+                                },
+                            ],
+                            label: Some("white_bg"),
+                        });
+
+                for batch in &self.batches {
+                    if let Some(bg) = self.get_bind_group(batch.texture_id) {
+                        pass.set_bind_group(1, bg, &[]);
+                    } else {
+                        pass.set_bind_group(1, &white_bind_group, &[]);
+                    }
+                    pass.draw_indexed(
+                        batch.start_index..(batch.start_index + batch.index_count),
+                        0,
+                        0..1,
+                    );
+                }
+            }
+            drop(pass);
+
+            // Extract pixel data from virtual canvas texture
+            let (vw, vh) = self.virtual_size;
+            let bytes_per_pixel = 4u32;
+            let output_size = (vw * vh * bytes_per_pixel) as u64;
+            
+            let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("readback"),
+                size: output_size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            
+            encoder.copy_texture_to_buffer(
+                wgpu::ImageCopyTexture { 
+                    texture: &scene.texture, 
+                    mip_level: 0, 
+                    origin: wgpu::Origin3d::ZERO, 
+                    aspect: wgpu::TextureAspect::All 
+                },
+                wgpu::ImageCopyBuffer { 
+                    buffer: &staging, 
+                    layout: wgpu::ImageDataLayout { 
+                        offset: 0, 
+                        bytes_per_row: Some(vw * bytes_per_pixel), 
+                        rows_per_image: Some(vh) 
+                    } 
+                },
+                wgpu::Extent3d { width: vw, height: vh, depth_or_array_layers: 1 },
+            );
+            
+            self.queue.submit(Some(encoder.finish()));
+            
+            let buffer_slice = staging.slice(..);
+            buffer_slice.map_async(wgpu::MapMode::Read, move |_| {});
+            self.device.poll(wgpu::Maintain::Wait);
+            let data = buffer_slice.get_mapped_range().to_vec();
+            let _ = buffer_slice;
+            staging.unmap();
+            Ok(data)
+        } else {
+            Err(anyhow::anyhow!("Scene texture not available"))
+        }
+    }
+
     pub fn update_from_engine_state(
         &mut self,
         engine_state: &crate::state::EngineState,
@@ -890,7 +1098,7 @@ impl SpriteRenderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: self.config.format, // Must match render pipeline format
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());

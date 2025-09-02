@@ -55,7 +55,7 @@ fn glyph_bits(c: char) -> [u8; 6] {
         m
     }
     thread_local! {
-        static GLYPHS: std::cell::RefCell<Option<std::collections::HashMap<char, [u8;6]>>> = std::cell::RefCell::new(None);
+        static GLYPHS: std::cell::RefCell<Option<std::collections::HashMap<char, [u8;6]>>> = const { std::cell::RefCell::new(None) };
     }
     GLYPHS.with(|cell| {
         if cell.borrow().is_none() {
@@ -117,14 +117,19 @@ pub fn rasterize_hud(lines: &[String], metrics: &MetricsCollector) -> (Vec<u8>, 
     for y in 0..height {
         for x in 0..width {
             let idx = ((y * width + x) * 4) as usize;
-            rgba[idx] = 0; rgba[idx + 1] = 0; rgba[idx + 2] = 0; rgba[idx + 3] = 160;
+            rgba[idx] = 0;
+            rgba[idx + 1] = 0;
+            rgba[idx + 2] = 0;
+            rgba[idx + 3] = 160;
         }
     }
 
     // Draw lines (uppercase, unsupported chars → space)
     for (li, line) in all_lines.iter().enumerate() {
         let mut s = line.to_uppercase();
-        if s.len() > max_chars { s.truncate(max_chars); }
+        if s.len() > max_chars {
+            s.truncate(max_chars);
+        }
         for (ci, ch) in s.chars().enumerate() {
             let cx = (ci as u32) * char_w + 1;
             let cy = (li as u32) * char_h + 1;
@@ -134,4 +139,3 @@ pub fn rasterize_hud(lines: &[String], metrics: &MetricsCollector) -> (Vec<u8>, 
 
     (rgba, width, height)
 }
-

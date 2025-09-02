@@ -44,7 +44,7 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
 - Batched submission
   - Typed buffers (preferred):
     - `local T = engine.create_transform_buffer(cap)` with `T:set(i, id, x, y, rot, sx, sy)` or `T:set_px(i, id, x_px, y_px, rot, w_px, h_px)`; submit via `engine.set_transforms(T)`.
-    - `local S = engine.create_sprite_buffer(cap)` with `S:set(i, id, tex, u0, v0, u1, v1, r, g, b, a)`, `S:set_tex`, `S:set_uv_rect`, `S:set_color`, `S:set_named_uv(i, atlas, name)`; submit via `engine.submit_sprites(S)`.
+    - `local S = engine.create_sprite_buffer(cap)` with `S:set(i, id, tex, u0, v0, u1, v1, r, g, b, a)`, `S:set_tex`, `S:set_uv_rect`, `S:set_color`, `S:set_z`, `S:set_named_uv(i, atlas, name)`; submit via `engine.submit_sprites(S)`.
     - Optional builder: `local fb = engine.frame_builder(T, S)` then `fb:transform(i, id, x,y,rot,sx,sy)`, `fb:transform_px(i, id, x_px,y_px,rot,w_px,h_px)`, `fb:sprite_uv(i, id, u0,v0,u1,v1)`, `fb:sprite_tex(i, id, tex, u0,v0,u1,v1, r,g,b,a)`, `fb:sprite_named(i, id, atlas, name, r,g,b,a)`, `fb:sprite_color(i, r,g,b,a)`, and finalize with `fb:commit()`.
   
 - Time, input, window
@@ -68,6 +68,7 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
 - `engine.set_render_resolution(mode)`: Sets the virtual canvas resolution. Supports two modes:
   - `"retro"`: A 320x180 virtual canvas that is always integer-scaled to fit the window, preserving a pixel-perfect look.
   - `"hd"`: A 1920x1080 virtual canvas. It will use integer scaling if the window is close (within 5%) to a multiple of 1080p (e.g., 4K). Otherwise, it uses linear filtering for smooth scaling.
+- **Depth Sorting**: Sprites are automatically sorted by their z-value before rendering. Higher z-values appear on top of lower z-values, regardless of submission order. Use `S:set_z(index, z_value)` to control draw order.
 
 ### Minimal Script Skeleton
 ```lua
@@ -83,6 +84,7 @@ function on_start()
   T = engine.create_transform_buffer(1)
   S = engine.create_sprite_buffer(1)
   T:set(1, e, 100, 100, 0.0, 32, 32)
+  S:set_z(1, 0.0) -- set z-depth for draw order
   fb = engine.frame_builder(T, S)
   fb:sprite_tex(1, e, tex, 0.0,0.0,1.0,1.0, 1.0,1.0,1.0,1.0)
   fb:commit() -- commit once to make sprite visible
@@ -136,6 +138,7 @@ end
 - texture: `S:set_tex(i, entity, tex)`
 - UVs: `S:set_uv_rect(i, u0, v0, u1, v1)`
 - color: `S:set_color(i, r, g, b, a)`
+- depth: `S:set_z(i, z_value)` (controls draw order; higher values render on top)
 - atlas: `S:set_named_uv(i, atlas, name)`
 - info: `S:len()`, `S:cap()`, `S:resize(new_cap)`
 
@@ -177,7 +180,8 @@ end
 
 ## Testing
 - Workspace: `cargo test` (unit + integration + offscreen e2e)
-- Host e2e tests live in `host/tests` and catch regressions (no‑flicker, persistence, precedence).
+- Host e2e tests live in `host/tests` and catch regressions (no‑flicker, persistence, precedence)
+- Virtual canvas e2e tests verify pixel-perfect z-ordering through the complete Lua → Engine → Renderer pipeline
 
 ## Notes
 - Focused on secure, deterministic scripting. Record/replay and richer metrics available; features are evolving.

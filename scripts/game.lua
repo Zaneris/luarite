@@ -65,11 +65,11 @@ function on_start()
   px_r, py_r = w-20.0, h*0.5
   reset_ball()
 
-  -- Static sprite attributes set once
-  S:set_tex(1, background, tex); S:set_color(1, 0.1,0.1,0.1,1.0); S:set_uv_rect(1, 0.0,0.0,1.0,1.0) -- Gray background
-  S:set_tex(2, paddle_l, tex); S:set_color(2, 0.2,0.8,0.2,1.0); if atlas then S:set_named_uv(2, atlas, "paddle") else S:set_uv_rect(2, 0.0,0.0,1.0,1.0) end
-  S:set_tex(3, paddle_r, tex); S:set_color(3, 0.2,0.2,0.8,1.0); if atlas then S:set_named_uv(3, atlas, "paddle") else S:set_uv_rect(3, 0.0,0.0,1.0,1.0) end
-  S:set_tex(4, ball,     tex); S:set_color(4, 0.9,0.9,0.2,1.0); if atlas then S:set_named_uv(4, atlas, "ball")   else S:set_uv_rect(4, 0.0,0.0,1.0,1.0) end
+  -- Static sprite attributes set once with z-values for proper depth ordering
+  S:set_tex(1, background, tex); S:set_color(1, 0.1,0.1,0.1,1.0); S:set_uv_rect(1, 0.0,0.0,1.0,1.0); S:set_z(1, -1.0) -- Background behind everything
+  S:set_tex(2, paddle_l, tex); S:set_color(2, 0.2,0.8,0.2,1.0); if atlas then S:set_named_uv(2, atlas, "paddle") else S:set_uv_rect(2, 0.0,0.0,1.0,1.0) end; S:set_z(2, 0.0) -- Paddles on main layer
+  S:set_tex(3, paddle_r, tex); S:set_color(3, 0.2,0.2,0.8,1.0); if atlas then S:set_named_uv(3, atlas, "paddle") else S:set_uv_rect(3, 0.0,0.0,1.0,1.0) end; S:set_z(3, 0.0) -- Paddles on main layer
+  S:set_tex(4, ball,     tex); S:set_color(4, 0.9,0.9,0.2,1.0); if atlas then S:set_named_uv(4, atlas, "ball")   else S:set_uv_rect(4, 0.0,0.0,1.0,1.0) end; S:set_z(4, 1.0) -- Ball in front
   fb = engine.frame_builder(T, S)
 end
 

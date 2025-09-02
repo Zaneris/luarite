@@ -1,10 +1,10 @@
 use anyhow::Result;
+use engine_core::state::SpriteData;
 use mlua::{AnyUserData, FromLua, Lua, RegistryKey, UserData, UserDataMethods, Value};
+use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use serde::Deserialize;
-use engine_core::state::SpriteData;
 use winit::keyboard::KeyCode;
 
 /// Current engine API version
@@ -104,13 +104,21 @@ impl UserData for InputSnapshot {
 
         methods.add_method("was_mouse_button_pressed", |_, this, button: String| {
             let is_down = this.mouse_buttons.get(&button).copied().unwrap_or(false);
-            let was_down = this.prev_mouse_buttons.get(&button).copied().unwrap_or(false);
+            let was_down = this
+                .prev_mouse_buttons
+                .get(&button)
+                .copied()
+                .unwrap_or(false);
             Ok(is_down && !was_down)
         });
 
         methods.add_method("was_mouse_button_released", |_, this, button: String| {
             let is_down = this.mouse_buttons.get(&button).copied().unwrap_or(false);
-            let was_down = this.prev_mouse_buttons.get(&button).copied().unwrap_or(false);
+            let was_down = this
+                .prev_mouse_buttons
+                .get(&button)
+                .copied()
+                .unwrap_or(false);
             Ok(!is_down && was_down)
         });
 
@@ -157,7 +165,7 @@ impl UserData for EngineCapabilities {
     }
 }
 
-fn create_keys_table(lua: &Lua) -> Result<mlua::Table> {
+fn create_keys_table(lua: &Lua) -> mlua::Result<mlua::Table> {
     let keys = lua.create_table()?;
     keys.set("Backquote", KeyCode::Backquote as u32)?;
     keys.set("Backslash", KeyCode::Backslash as u32)?;
@@ -262,20 +270,19 @@ fn create_keys_table(lua: &Lua) -> Result<mlua::Table> {
     Ok(keys)
 }
 
-
 /// Main engine API struct
 pub struct EngineApi {
     next_entity_id: u32,
     next_texture_id: u32,
     fixed_time: Rc<RefCell<f64>>, // shared with time() closure
     persistence_store: Rc<RefCell<HashMap<String, Value>>>,
-    rng_state: Rc<RefCell<u64>>, // deterministic RNG
+    rng_state: Rc<RefCell<u64>>,       // deterministic RNG
     input: Rc<RefCell<InputSnapshot>>, // Shared input state
-    
+
     // Simple rate limiters (window start, count)
     log_rl: Rc<RefCell<(f64, u32)>>,
     hud_rl: Rc<RefCell<(f64, u32)>>,
-    #[allow(dead_code)] // TODO: will be used for capability queries  
+    #[allow(dead_code)] // TODO: will be used for capability queries
     capabilities: EngineCapabilities,
 }
 
@@ -302,11 +309,15 @@ impl EngineApi {
         let globals = lua.globals();
 
         // Create main engine table
-        let engine_table = lua.create_table().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let engine_table = lua
+            .create_table()
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Key constants
-        let keys_table = create_keys_table(lua)?;
-        engine_table.set("keys", keys_table)?;
+        let keys_table = create_keys_table(lua).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("keys", keys_table)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Constructors: typed buffers
         {
@@ -326,13 +337,17 @@ impl EngineApi {
         }
 
         // API version and capabilities
-        engine_table.set("api_version", API_VERSION).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("api_version", API_VERSION)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Set up get_capabilities function
         let caps_func = lua
             .create_function(move |_, ()| Ok(EngineCapabilities::default()))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("get_capabilities", caps_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("get_capabilities", caps_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Entity management
         let next_entity_id = std::cell::RefCell::new(self.next_entity_id);
@@ -344,7 +359,9 @@ impl EngineApi {
                 Ok(entity)
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("create_entity", entity_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("create_entity", entity_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Texture loading
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);
@@ -357,58 +374,60 @@ impl EngineApi {
                 Ok(texture)
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("load_texture", texture_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("load_texture", texture_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Transform batching (typed buffers only)
         let transform_func = lua
-            .create_function(|_, v: Value| {
-                match v {
-                    Value::UserData(ud) => {
-                        if let Ok(tb) = ud.borrow::<TransformBuffer>() {
-                            let rows = *tb.len.borrow();
-                            let buf = tb.buf.borrow();
-                            if rows * 6 > buf.len() {
-                                return Err(mlua::Error::RuntimeError(
-                                    "TransformBuffer length exceeds capacity".into(),
-                                ));
-                            }
-                            tracing::debug!("Setting {} transforms (typed)", rows);
-                            Ok(())
-                        } else {
-                            Err(mlua::Error::RuntimeError(
-                                "ARG_ERROR: set_transforms expects TransformBuffer".into(),
-                            ))
+            .create_function(|_, v: Value| match v {
+                Value::UserData(ud) => {
+                    if let Ok(tb) = ud.borrow::<TransformBuffer>() {
+                        let rows = *tb.len.borrow();
+                        let buf = tb.buf.borrow();
+                        if rows * 6 > buf.len() {
+                            return Err(mlua::Error::RuntimeError(
+                                "TransformBuffer length exceeds capacity".into(),
+                            ));
                         }
+                        tracing::debug!("Setting {} transforms (typed)", rows);
+                        Ok(())
+                    } else {
+                        Err(mlua::Error::RuntimeError(
+                            "ARG_ERROR: set_transforms expects TransformBuffer".into(),
+                        ))
                     }
-                    _ => Err(mlua::Error::RuntimeError(
-                        "ARG_ERROR: set_transforms expects TransformBuffer".into(),
-                    )),
                 }
+                _ => Err(mlua::Error::RuntimeError(
+                    "ARG_ERROR: set_transforms expects TransformBuffer".into(),
+                )),
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("set_transforms", transform_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("set_transforms", transform_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Sprite batching (typed buffers only)
         let sprite_func = lua
-            .create_function(|_, v: Value| {
-                match v {
-                    Value::UserData(ud) => {
-                        if let Ok(_sb) = ud.borrow::<SpriteBuffer>() {
-                            tracing::debug!("Submitting sprites (typed)");
-                            Ok(())
-                        } else {
-                            Err(mlua::Error::RuntimeError(
-                                "ARG_ERROR: submit_sprites expects SpriteBuffer".into(),
-                            ))
-                        }
+            .create_function(|_, v: Value| match v {
+                Value::UserData(ud) => {
+                    if let Ok(_sb) = ud.borrow::<SpriteBuffer>() {
+                        tracing::debug!("Submitting sprites (typed)");
+                        Ok(())
+                    } else {
+                        Err(mlua::Error::RuntimeError(
+                            "ARG_ERROR: submit_sprites expects SpriteBuffer".into(),
+                        ))
                     }
-                    _ => Err(mlua::Error::RuntimeError(
-                        "ARG_ERROR: submit_sprites expects SpriteBuffer".into(),
-                    )),
                 }
+                _ => Err(mlua::Error::RuntimeError(
+                    "ARG_ERROR: submit_sprites expects SpriteBuffer".into(),
+                )),
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("submit_sprites", sprite_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("submit_sprites", sprite_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Frame builder façade: engine.frame_builder(T, S) -> builder
         let fb_ctor = lua
@@ -418,23 +437,27 @@ impl EngineApi {
                 Ok(ud)
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("frame_builder", fb_ctor).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("frame_builder", fb_ctor)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Input system
         let input_snapshot = self.input.clone();
         let input_func = lua
             .create_function(move |_, ()| Ok(input_snapshot.borrow().clone()))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("get_input", input_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("get_input", input_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Time system
         let fixed_time = self.fixed_time.clone();
         let time_func = lua
             .create_function(move |_, ()| Ok(*fixed_time.borrow()))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("time", time_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
-
-        
+        engine_table
+            .set("time", time_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Deterministic RNG: seed(n), random()
         let rng_seed = self.rng_state.clone();
@@ -444,7 +467,9 @@ impl EngineApi {
                 Ok(())
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("seed", seed_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("seed", seed_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         let rng_state = self.rng_state.clone();
         let rand_func = lua
@@ -464,7 +489,9 @@ impl EngineApi {
                 Ok(val)
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("random", rand_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("random", rand_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Add random_bool(p)
         let rng_state_bool = self.rng_state.clone();
@@ -521,7 +548,9 @@ impl EngineApi {
                 Ok(())
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("persist", persist_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("persist", persist_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         let store_ref2 = self.persistence_store.clone();
         let restore_func = lua
@@ -534,7 +563,9 @@ impl EngineApi {
                 }
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("restore", restore_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("restore", restore_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Logging system (rate-limited 30 msgs/sec)
         let fixed_time_for_log = self.fixed_time.clone();
@@ -560,7 +591,9 @@ impl EngineApi {
                 Ok(())
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("log", log_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("log", log_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // --- Dummy implementations for base API ---
 
@@ -574,25 +607,38 @@ impl EngineApi {
                 Ok(metrics_table)
             })
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("get_metrics", metrics_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("get_metrics", metrics_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Window size
-        let ws_func = lua.create_function(|_, ()| Ok((0, 0))).map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("window_size", ws_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let ws_func = lua
+            .create_function(|_, ()| Ok((0, 0)))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("window_size", ws_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // HUD printf
-        let hud_fn = lua.create_function(|_, _: String| Ok(())).map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("hud_printf", hud_fn).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let hud_fn = lua
+            .create_function(|_, _: String| Ok(()))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("hud_printf", hud_fn)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Clear color
-        let set_clear_color_fn =
-            lua.create_function(|_, _: mlua::Variadic<mlua::Value>| Ok(())).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let set_clear_color_fn = lua
+            .create_function(|_, _: mlua::Variadic<mlua::Value>| Ok(()))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         engine_table
             .set("set_clear_color", set_clear_color_fn)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Render resolution
-        let set_render_fn = lua.create_function(|_, _: String| Ok(())).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let set_render_fn = lua
+            .create_function(|_, _: String| Ok(()))
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         engine_table
             .set("set_render_resolution", set_render_fn)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
@@ -601,15 +647,23 @@ impl EngineApi {
         let atlas_func = lua
             .create_function(|_, _: (String, String)| Ok(Value::Nil))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        engine_table.set("atlas_load", atlas_func).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("atlas_load", atlas_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Lock the engine table metatable
-        let metatable = lua.create_table().map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        metatable.set("__metatable", "locked").map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let metatable = lua
+            .create_table()
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        metatable
+            .set("__metatable", "locked")
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         engine_table.set_metatable(Some(metatable));
 
         // Set engine namespace globally
-        globals.set("engine", engine_table).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        globals
+            .set("engine", engine_table)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         tracing::info!("Engine API namespace initialized (version {})", API_VERSION);
         Ok(())
@@ -635,7 +689,11 @@ impl TransformBuffer {
     fn new(capacity: usize) -> Self {
         let mut v = Vec::with_capacity(capacity * 6);
         v.resize(capacity * 6, 0.0);
-        Self { buf: Rc::new(RefCell::new(v)), len: Rc::new(RefCell::new(0)), cap: Rc::new(RefCell::new(capacity)) }
+        Self {
+            buf: Rc::new(RefCell::new(v)),
+            len: Rc::new(RefCell::new(0)),
+            cap: Rc::new(RefCell::new(capacity)),
+        }
     }
 }
 
@@ -648,70 +706,179 @@ pub struct SpriteBuffer {
 impl SpriteBuffer {
     fn new(capacity: usize) -> Self {
         let mut v: Vec<SpriteData> = Vec::with_capacity(capacity);
-        v.resize(capacity, SpriteData { entity_id: 0, texture_id: 0, uv: [0.0;4], color: [0.0;4]});
-        Self { rows: Rc::new(RefCell::new(v)), len: Rc::new(RefCell::new(0)), cap: Rc::new(RefCell::new(capacity)) }
+        v.resize(
+            capacity,
+            SpriteData {
+                entity_id: 0,
+                texture_id: 0,
+                uv: [0.0; 4],
+                color: [0.0; 4],
+                z: 0.0,
+            },
+        );
+        Self {
+            rows: Rc::new(RefCell::new(v)),
+            len: Rc::new(RefCell::new(0)),
+            cap: Rc::new(RefCell::new(capacity)),
+        }
     }
 }
 
 impl UserData for SpriteBuffer {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("set", |_, this, (i, id_ud, tex_ud, u0, v0, u1, v1, r, g, b, a): (usize, AnyUserData, AnyUserData, f32, f32, f32, f32, f32, f32, f32, f32)| {
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let entity_id = id_ud.borrow::<EntityId>()?.0;
-            let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
-            let mut rows = this.rows.borrow_mut();
-            rows[idx] = SpriteData { entity_id, texture_id, uv: [u0, v0, u1, v1], color: [r, g, b, a] };
-            let mut l = this.len.borrow_mut(); if i > *l { *l = i; }
-            Ok(())
-        });
-        methods.add_method_mut("set_tex", |_, this, (i, id_ud, tex_ud): (usize, AnyUserData, AnyUserData)| {
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let entity_id = id_ud.borrow::<EntityId>()?.0;
-            let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
+        methods.add_method_mut(
+            "set",
+            |_,
+             this,
+             (i, id_ud, tex_ud, u0, v0, u1, v1, r, g, b, a, z): (
+                usize,
+                AnyUserData,
+                AnyUserData,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+            )| {
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *this.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let entity_id = id_ud.borrow::<EntityId>()?.0;
+                let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
+                let mut rows = this.rows.borrow_mut();
+                rows[idx] = SpriteData {
+                    entity_id,
+                    texture_id,
+                    uv: [u0, v0, u1, v1],
+                    color: [r, g, b, a],
+                    z,
+                };
+                let mut l = this.len.borrow_mut();
+                if i > *l {
+                    *l = i;
+                }
+                Ok(())
+            },
+        );
+        methods.add_method_mut(
+            "set_tex",
+            |_, this, (i, id_ud, tex_ud): (usize, AnyUserData, AnyUserData)| {
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *this.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let entity_id = id_ud.borrow::<EntityId>()?.0;
+                let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
+                let mut rows = this.rows.borrow_mut();
+                let row = &mut rows[idx];
+                row.entity_id = entity_id;
+                row.texture_id = texture_id;
+                let mut l = this.len.borrow_mut();
+                if i > *l {
+                    *l = i;
+                }
+                Ok(())
+            },
+        );
+        methods.add_method_mut(
+            "set_uv_rect",
+            |_, this, (i, u0, v0, u1, v1): (usize, f32, f32, f32, f32)| {
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *this.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let mut rows = this.rows.borrow_mut();
+                let row = &mut rows[idx];
+                row.uv = [u0, v0, u1, v1];
+                Ok(())
+            },
+        );
+        methods.add_method_mut(
+            "set_color",
+            |_, this, (i, r, g, b, a): (usize, f32, f32, f32, f32)| {
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *this.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let mut rows = this.rows.borrow_mut();
+                let row = &mut rows[idx];
+                row.color = [r, g, b, a];
+                Ok(())
+            },
+        );
+        methods.add_method_mut("set_z", |_, this, (i, z): (usize, f32)| {
+            let idx = i
+                .checked_sub(1)
+                .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+            let cap = *this.cap.borrow();
+            if idx >= cap {
+                return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+            }
             let mut rows = this.rows.borrow_mut();
             let row = &mut rows[idx];
-            row.entity_id = entity_id; row.texture_id = texture_id;
-            let mut l = this.len.borrow_mut(); if i > *l { *l = i; }
+            row.z = z;
             Ok(())
         });
-        methods.add_method_mut("set_uv_rect", |_, this, (i, u0, v0, u1, v1): (usize, f32, f32, f32, f32)| {
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let mut rows = this.rows.borrow_mut();
-            let row = &mut rows[idx];
-            row.uv = [u0, v0, u1, v1];
-            Ok(())
-        });
-        methods.add_method_mut("set_color", |_, this, (i, r, g, b, a): (usize, f32, f32, f32, f32)| {
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let mut rows = this.rows.borrow_mut();
-            let row = &mut rows[idx];
-            row.color = [r, g, b, a];
-            Ok(())
-        });
-        methods.add_method_mut("set_named_uv", |_, this, (i, atlas_ud, name): (usize, AnyUserData, String)| {
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let atlas = atlas_ud.borrow::<Atlas>()?;
-            let uv = atlas
-                .uv_map
-                .get(&name)
-                .ok_or_else(|| mlua::Error::RuntimeError(format!("unknown atlas name: {}", name)))?;
-            let mut rows = this.rows.borrow_mut();
-            let row = &mut rows[idx];
-            row.uv = uv.clone();
-            row.texture_id = atlas.texture.0;
-            Ok(())
-        });
+        methods.add_method_mut(
+            "set_named_uv",
+            |_, this, (i, atlas_ud, name): (usize, AnyUserData, String)| {
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *this.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let atlas = atlas_ud.borrow::<Atlas>()?;
+                let uv = atlas.uv_map.get(&name).ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!("unknown atlas name: {}", name))
+                })?;
+                let mut rows = this.rows.borrow_mut();
+                let row = &mut rows[idx];
+                row.uv = *uv;
+                row.texture_id = atlas.texture.0;
+                Ok(())
+            },
+        );
         methods.add_method("len", |_, this, ()| Ok(*this.len.borrow() as i64));
         methods.add_method("cap", |_, this, ()| Ok(*this.cap.borrow() as i64));
         methods.add_method_mut("resize", |_, this, new_cap: usize| {
-            let mut v = this.rows.borrow_mut(); v.resize(new_cap, SpriteData { entity_id: 0, texture_id: 0, uv: [0.0;4], color: [0.0;4]});
+            let mut v = this.rows.borrow_mut();
+            v.resize(
+                new_cap,
+                SpriteData {
+                    entity_id: 0,
+                    texture_id: 0,
+                    uv: [0.0; 4],
+                    color: [0.0; 4],
+                    z: 0.0,
+                },
+            );
             *this.cap.borrow_mut() = new_cap;
-            if *this.len.borrow() > new_cap { *this.len.borrow_mut() = new_cap; }
+            if *this.len.borrow() > new_cap {
+                *this.len.borrow_mut() = new_cap;
+            }
+            Ok(())
+        });
+        methods.add_method_mut("clear", |_, this, ()| {
+            *this.len.borrow_mut() = 0;
             Ok(())
         });
     }
@@ -731,31 +898,66 @@ impl UserData for Atlas {
             if let Some(uv) = this.uv_map.get(&name) {
                 Ok((uv[0], uv[1], uv[2], uv[3]))
             } else {
-                Err(mlua::Error::RuntimeError(format!("unknown atlas name: {}", name)))
+                Err(mlua::Error::RuntimeError(format!(
+                    "unknown atlas name: {}",
+                    name
+                )))
             }
         });
     }
 }
 impl UserData for TransformBuffer {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("set", |lua, this, (i, id, x, y, rot, w, h): (usize, Value, f64, f64, f64, f64, f64)| {
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *this.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let entity_id = match id {
-                Value::UserData(ud) => { if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f32 } else { return Err(mlua::Error::RuntimeError("id must be EntityId or number".into())); } }
-                v => f64::from_lua(v, lua)? as f32,
-            };
-            let off = idx * 6; let mut b = this.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x as f32; b[off+2]=y as f32; b[off+3]=rot as f32; b[off+4]=w as f32; b[off+5]=h as f32;
-            let mut l = this.len.borrow_mut(); if i > *l { *l = i; }
-            Ok(())
-        });
+        methods.add_method_mut(
+            "set",
+            |lua, this, (i, id, x, y, rot, w, h): (usize, Value, f64, f64, f64, f64, f64)| {
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *this.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let entity_id = match id {
+                    Value::UserData(ud) => {
+                        if let Ok(ent) = ud.borrow::<EntityId>() {
+                            ent.0 as f32
+                        } else {
+                            return Err(mlua::Error::RuntimeError(
+                                "id must be EntityId or number".into(),
+                            ));
+                        }
+                    }
+                    v => f64::from_lua(v, lua)? as f32,
+                };
+                let off = idx * 6;
+                let mut b = this.buf.borrow_mut();
+                b[off] = entity_id;
+                b[off + 1] = x as f32;
+                b[off + 2] = y as f32;
+                b[off + 3] = rot as f32;
+                b[off + 4] = w as f32;
+                b[off + 5] = h as f32;
+                let mut l = this.len.borrow_mut();
+                if i > *l {
+                    *l = i;
+                }
+                Ok(())
+            },
+        );
         methods.add_method("len", |_, this, ()| Ok(*this.len.borrow() as i64));
         methods.add_method("cap", |_, this, ()| Ok(*this.cap.borrow() as i64));
         methods.add_method_mut("resize", |_, this, new_cap: usize| {
-            let mut v = this.buf.borrow_mut(); v.resize(new_cap*6, 0.0);
+            let mut v = this.buf.borrow_mut();
+            v.resize(new_cap * 6, 0.0);
             *this.cap.borrow_mut() = new_cap;
-            if *this.len.borrow() > new_cap { *this.len.borrow_mut() = new_cap; }
+            if *this.len.borrow() > new_cap {
+                *this.len.borrow_mut() = new_cap;
+            }
+            Ok(())
+        });
+        methods.add_method_mut("clear", |_, this, ()| {
+            *this.len.borrow_mut() = 0;
             Ok(())
         });
     }
@@ -774,6 +976,7 @@ pub struct SpriteV2 {
     pub g: f32,
     pub b: f32,
     pub a: f32,
+    pub z: f32,
 }
 
 impl EngineApi {
@@ -821,7 +1024,9 @@ impl EngineApi {
                         tracing::debug!("Setting {} transforms (typed)", rows);
                         Ok(())
                     } else {
-                        Err(mlua::Error::RuntimeError("ARG_ERROR: unsupported userdata for set_transforms".into()))
+                        Err(mlua::Error::RuntimeError(
+                            "ARG_ERROR: unsupported userdata for set_transforms".into(),
+                        ))
                     }
                 }
                 Value::Table(arr) => {
@@ -832,7 +1037,9 @@ impl EngineApi {
                     (st_cb)(&out);
                     Ok(())
                 }
-                _ => Err(mlua::Error::RuntimeError("ARG_ERROR: set_transforms expects table or TransformBuffer".into())),
+                _ => Err(mlua::Error::RuntimeError(
+                    "ARG_ERROR: set_transforms expects table or TransformBuffer".into(),
+                )),
             }
         }) {
             Ok(f) => f,
@@ -869,13 +1076,27 @@ impl EngineApi {
                             out.reserve(rows);
                             for i in 0..rows {
                                 let r = &vec[i];
-                                out.push(SpriteV2 { entity_id: r.entity_id, texture_id: r.texture_id, u0: r.uv[0], v0: r.uv[1], u1: r.uv[2], v1: r.uv[3], r: r.color[0], g: r.color[1], b: r.color[2], a: r.color[3] });
+                                out.push(SpriteV2 {
+                                    entity_id: r.entity_id,
+                                    texture_id: r.texture_id,
+                                    u0: r.uv[0],
+                                    v0: r.uv[1],
+                                    u1: r.uv[2],
+                                    v1: r.uv[3],
+                                    r: r.color[0],
+                                    g: r.color[1],
+                                    b: r.color[2],
+                                    a: r.color[3],
+                                    z: r.z,
+                                });
                             }
                             (sb_cb)(&out);
                         }
                         Ok(())
                     } else {
-                        Err(mlua::Error::RuntimeError("ARG_ERROR: unsupported userdata for submit_sprites".into()))
+                        Err(mlua::Error::RuntimeError(
+                            "ARG_ERROR: unsupported userdata for submit_sprites".into(),
+                        ))
                     }
                 }
                 Value::Table(sprites) => {
@@ -887,7 +1108,9 @@ impl EngineApi {
                     (sb_cb)(&out);
                     Ok(())
                 }
-                _ => Err(mlua::Error::RuntimeError("ARG_ERROR: submit_sprites expects table or SpriteBuffer".into())),
+                _ => Err(mlua::Error::RuntimeError(
+                    "ARG_ERROR: submit_sprites expects table or SpriteBuffer".into(),
+                )),
             }
         }) {
             Ok(f) => f,
@@ -984,8 +1207,14 @@ impl EngineApi {
             .create_function(move |_, msg: String| {
                 let now = *fixed_time_for_hud.borrow();
                 let mut rl = hud_rl.borrow_mut();
-                if now - rl.0 >= 1.0 { rl.0 = now; rl.1 = 0; }
-                if rl.1 < 30 { rl.1 += 1; hud_cb(msg); }
+                if now - rl.0 >= 1.0 {
+                    rl.0 = now;
+                    rl.1 = 0;
+                }
+                if rl.1 < 30 {
+                    rl.1 += 1;
+                    hud_cb(msg);
+                }
                 Ok(())
             })
             .map_err(|e| anyhow::Error::msg(format!("Failed to create hud_printf: {}", e)))?;
@@ -1022,15 +1251,27 @@ impl EngineApi {
         let srm = set_render_mode_cb.clone();
         let set_render_fn = lua
             .create_function(move |_, mode: String| {
-                let m = if mode.eq_ignore_ascii_case("retro") { "retro" } else { "hd" };
+                let m = if mode.eq_ignore_ascii_case("retro") {
+                    "retro"
+                } else {
+                    "hd"
+                };
                 // static str coercion for callback type simplicity
-                if m == "retro" { srm("retro") } else { srm("hd") }
+                if m == "retro" {
+                    srm("retro")
+                } else {
+                    srm("hd")
+                }
                 Ok(())
             })
-            .map_err(|e| anyhow::Error::msg(format!("Failed to create set_render_resolution: {}", e)))?;
+            .map_err(|e| {
+                anyhow::Error::msg(format!("Failed to create set_render_resolution: {}", e))
+            })?;
         engine_table
             .set("set_render_resolution", set_render_fn)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to set set_render_resolution: {}", e)))?;
+            .map_err(|e| {
+                anyhow::Error::msg(format!("Failed to set set_render_resolution: {}", e))
+            })?;
 
         // Override load_texture to notify host and return a handle immediately
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);
@@ -1050,18 +1291,34 @@ impl EngineApi {
 
         // atlas_load(png, json) -> Atlas|nil
         #[derive(Deserialize)]
-        struct AtlasJsonEntry { x: f32, y: f32, w: f32, h: f32 }
+        struct AtlasJsonEntry {
+            x: f32,
+            y: f32,
+            w: f32,
+            h: f32,
+        }
         #[derive(Deserialize)]
-        struct AtlasDoc { frames: HashMap<String, AtlasJsonEntry>, width: Option<f32>, height: Option<f32> }
+        struct AtlasDoc {
+            frames: HashMap<String, AtlasJsonEntry>,
+            width: Option<f32>,
+            height: Option<f32>,
+        }
         let next_tex_for_atlas = std::cell::RefCell::new(self.next_texture_id + 10_000);
         let lt_cb2 = load_texture_cb.clone();
         let atlas_func = lua
             .create_function(move |lua, (png_path, json_path): (String, String)| {
                 let mut id_ref = next_tex_for_atlas.borrow_mut();
-                let id = *id_ref; *id_ref += 1;
+                let id = *id_ref;
+                *id_ref += 1;
                 lt_cb2(png_path.clone(), id);
-                let doc_s = match std::fs::read_to_string(&json_path) { Ok(s) => s, Err(_) => return Ok(Value::Nil) };
-                let parsed: AtlasDoc = match serde_json::from_str(&doc_s) { Ok(v) => v, Err(_) => return Ok(Value::Nil) };
+                let doc_s = match std::fs::read_to_string(&json_path) {
+                    Ok(s) => s,
+                    Err(_) => return Ok(Value::Nil),
+                };
+                let parsed: AtlasDoc = match serde_json::from_str(&doc_s) {
+                    Ok(v) => v,
+                    Err(_) => return Ok(Value::Nil),
+                };
                 let mut uv_map = HashMap::new();
                 let sheet_w = parsed.width.unwrap_or(1.0);
                 let sheet_h = parsed.height.unwrap_or(1.0);
@@ -1072,7 +1329,10 @@ impl EngineApi {
                     let v1 = (e.y + e.h) / sheet_h;
                     uv_map.insert(name, [u0, v0, u1, v1]);
                 }
-                let atlas = Atlas { texture: TextureHandle(id), uv_map };
+                let atlas = Atlas {
+                    texture: TextureHandle(id),
+                    uv_map,
+                };
                 Ok(Value::UserData(lua.create_userdata(atlas)?))
             })
             .map_err(|e| anyhow::Error::msg(format!("Failed to create atlas_load: {}", e)))?;
@@ -1085,7 +1345,11 @@ impl EngineApi {
 }
 
 // DRY helpers for parsing v2 tables
-fn parse_transforms_table_to_out(lua: &Lua, arr: mlua::Table, out: &mut Vec<f64>) -> mlua::Result<()> {
+fn parse_transforms_table_to_out(
+    lua: &Lua,
+    arr: mlua::Table,
+    out: &mut Vec<f64>,
+) -> mlua::Result<()> {
     let len = arr.raw_len();
     if len % 6 != 0 {
         return Err(mlua::Error::RuntimeError(format!(
@@ -1097,55 +1361,108 @@ fn parse_transforms_table_to_out(lua: &Lua, arr: mlua::Table, out: &mut Vec<f64>
     let mut i = 1;
     while i <= len {
         // id can be EntityId userdata or a number
-        let v: mlua::Value = arr.raw_get(i)?; i += 1;
+        let v: mlua::Value = arr.raw_get(i)?;
+        i += 1;
         let id_num = match v {
             mlua::Value::UserData(ud) => {
-                if let Ok(ent) = ud.borrow::<EntityId>() { ent.0 as f64 } else {
-                    return Err(mlua::Error::RuntimeError("ARG_ERROR: id must be EntityId or number".into()));
+                if let Ok(ent) = ud.borrow::<EntityId>() {
+                    ent.0 as f64
+                } else {
+                    return Err(mlua::Error::RuntimeError(
+                        "ARG_ERROR: id must be EntityId or number".into(),
+                    ));
                 }
             }
             _ => f64::from_lua(v, lua)?,
         };
         out.push(id_num);
         // x,y,rot,sx,sy numbers
-        let x: f64 = arr.raw_get(i)?; i += 1; out.push(x);
-        let y: f64 = arr.raw_get(i)?; i += 1; out.push(y);
-        let rot: f64 = arr.raw_get(i)?; i += 1; out.push(rot);
-        let sx: f64 = arr.raw_get(i)?; i += 1; out.push(sx);
-        let sy: f64 = arr.raw_get(i)?; i += 1; out.push(sy);
+        let x: f64 = arr.raw_get(i)?;
+        i += 1;
+        out.push(x);
+        let y: f64 = arr.raw_get(i)?;
+        i += 1;
+        out.push(y);
+        let rot: f64 = arr.raw_get(i)?;
+        i += 1;
+        out.push(rot);
+        let sx: f64 = arr.raw_get(i)?;
+        i += 1;
+        out.push(sx);
+        let sy: f64 = arr.raw_get(i)?;
+        i += 1;
+        out.push(sy);
     }
     Ok(())
 }
 
-fn parse_sprites_table_to_out(_lua: &Lua, sprites: mlua::Table, out: &mut Vec<SpriteV2>) -> mlua::Result<()> {
+fn parse_sprites_table_to_out(
+    _lua: &Lua,
+    sprites: mlua::Table,
+    out: &mut Vec<SpriteV2>,
+) -> mlua::Result<()> {
     let len = sprites.raw_len();
-    if len % 10 != 0 {
+    if len % 11 != 0 {
         return Err(mlua::Error::RuntimeError(format!(
-            "ARG_ERROR: submit_sprites stride mismatch (got={}, want=10)",
-            len % 10
+            "ARG_ERROR: submit_sprites stride mismatch (got={}, want=11)",
+            len % 11
         )));
     }
-    out.reserve(len / 10);
+    out.reserve(len / 11);
     let mut i = 1; // Lua arrays are 1-based
     while i <= len {
         // entity (UserData EntityId)
-        let ent_ud: mlua::AnyUserData = sprites.raw_get(i)?; i += 1;
-        let entity_id = if let Ok(ent) = ent_ud.borrow::<EntityId>() { ent.0 } else {
-            return Err(mlua::Error::RuntimeError("ARG_ERROR: sprite id must be EntityId".into())); };
+        let ent_ud: mlua::AnyUserData = sprites.raw_get(i)?;
+        i += 1;
+        let entity_id = if let Ok(ent) = ent_ud.borrow::<EntityId>() {
+            ent.0
+        } else {
+            return Err(mlua::Error::RuntimeError(
+                "ARG_ERROR: sprite id must be EntityId".into(),
+            ));
+        };
         // texture (UserData TextureHandle)
-        let tex_ud: mlua::AnyUserData = sprites.raw_get(i)?; i += 1;
-        let texture_id = if let Ok(tex) = tex_ud.borrow::<TextureHandle>() { tex.0 } else {
-            return Err(mlua::Error::RuntimeError("ARG_ERROR: texture must be TextureHandle".into())); };
-        // remaining 8 numbers
-        let u0: f32 = sprites.raw_get(i)?; i += 1;
-        let v0: f32 = sprites.raw_get(i)?; i += 1;
-        let u1: f32 = sprites.raw_get(i)?; i += 1;
-        let v1: f32 = sprites.raw_get(i)?; i += 1;
-        let r: f32 = sprites.raw_get(i)?; i += 1;
-        let g: f32 = sprites.raw_get(i)?; i += 1;
-        let b: f32 = sprites.raw_get(i)?; i += 1;
-        let a: f32 = sprites.raw_get(i)?; i += 1;
-        out.push(SpriteV2 { entity_id, texture_id, u0, v0, u1, v1, r, g, b, a });
+        let tex_ud: mlua::AnyUserData = sprites.raw_get(i)?;
+        i += 1;
+        let texture_id = if let Ok(tex) = tex_ud.borrow::<TextureHandle>() {
+            tex.0
+        } else {
+            return Err(mlua::Error::RuntimeError(
+                "ARG_ERROR: texture must be TextureHandle".into(),
+            ));
+        };
+        // remaining 9 numbers
+        let u0: f32 = sprites.raw_get(i)?;
+        i += 1;
+        let v0: f32 = sprites.raw_get(i)?;
+        i += 1;
+        let u1: f32 = sprites.raw_get(i)?;
+        i += 1;
+        let v1: f32 = sprites.raw_get(i)?;
+        i += 1;
+        let r: f32 = sprites.raw_get(i)?;
+        i += 1;
+        let g: f32 = sprites.raw_get(i)?;
+        i += 1;
+        let b: f32 = sprites.raw_get(i)?;
+        i += 1;
+        let a: f32 = sprites.raw_get(i)?;
+        i += 1;
+        let z: f32 = sprites.raw_get(i)?;
+        i += 1;
+        out.push(SpriteV2 {
+            entity_id,
+            texture_id,
+            u0,
+            v0,
+            u1,
+            v1,
+            r,
+            g,
+            b,
+            a,
+            z,
+        });
     }
     Ok(())
 }
@@ -1174,58 +1491,141 @@ impl UserData for FrameBuilder {
             let cap = *tb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
             let entity_id = id_ud.borrow::<EntityId>()?.0 as f32;
             let off = idx * 6; let mut b = tb.buf.borrow_mut();
-            b[off+0]=entity_id; b[off+1]=x as f32; b[off+2]=y as f32; b[off+3]=rot as f32; b[off+4]=w as f32; b[off+5]=h as f32;
+            b[off]=entity_id; b[off+1]=x as f32; b[off+2]=y as f32; b[off+3]=rot as f32; b[off+4]=w as f32; b[off+5]=h as f32;
             let mut l = tb.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
-        methods.add_method_mut("sprite_tex", |lua, this, (i, id_ud, tex_ud, u0, v0, u1, v1, r, g, b, a): (usize, AnyUserData, AnyUserData, f32, f32, f32, f32, f32, f32, f32, f32)| {
-            let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
-            let sb = s_ud.borrow::<SpriteBuffer>()?;
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *sb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let entity_id = id_ud.borrow::<EntityId>()?.0;
-            let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
-            let mut rows = sb.rows.borrow_mut();
-            rows[idx] = SpriteData { entity_id, texture_id, uv: [u0, v0, u1, v1], color: [r, g, b, a] };
-            let mut l = sb.len.borrow_mut(); if i > *l { *l = i; }
-            Ok(())
-        });
-        methods.add_method_mut("sprite_uv", |lua, this, (i, id_ud, u0, v0, u1, v1): (usize, AnyUserData, f32, f32, f32, f32)| {
-            let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
-            let sb = s_ud.borrow::<SpriteBuffer>()?;
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *sb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let entity_id = id_ud.borrow::<EntityId>()?.0;
-            let mut rows = sb.rows.borrow_mut();
-            let row = &mut rows[idx];
-            row.entity_id = entity_id; row.uv = [u0, v0, u1, v1];
-            let mut l = sb.len.borrow_mut(); if i > *l { *l = i; }
-            Ok(())
-        });
-        methods.add_method_mut("sprite_color", |lua, this, (i, r, g, b, a): (usize, f32, f32, f32, f32)| {
-            let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
-            let sb = s_ud.borrow::<SpriteBuffer>()?;
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *sb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let mut rows = sb.rows.borrow_mut();
-            let row = &mut rows[idx];
-            row.color = [r, g, b, a];
-            // length unchanged; no entity/tex set here
-            Ok(())
-        });
-        methods.add_method_mut("sprite_named", |lua, this, (i, id_ud, atlas_ud, name, r, g, b, a): (usize, AnyUserData, AnyUserData, String, f32, f32, f32, f32)| {
-            let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
-            let sb = s_ud.borrow::<SpriteBuffer>()?;
-            let idx = i.checked_sub(1).ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-            let cap = *sb.cap.borrow(); if idx >= cap { return Err(mlua::Error::RuntimeError("index exceeds capacity".into())); }
-            let entity_id = id_ud.borrow::<EntityId>()?.0;
-            let atlas = atlas_ud.borrow::<Atlas>()?;
-            let uv = atlas.uv_map.get(&name).ok_or_else(|| mlua::Error::RuntimeError(format!("unknown atlas name: {}", name)))?;
-            let mut rows = sb.rows.borrow_mut();
-            rows[idx] = SpriteData { entity_id, texture_id: atlas.texture.0, uv: [uv[0], uv[1], uv[2], uv[3]], color: [r, g, b, a] };
-            let mut l = sb.len.borrow_mut(); if i > *l { *l = i; }
-            Ok(())
-        });
+        methods.add_method_mut(
+            "sprite_tex",
+            |lua,
+             this,
+             (i, id_ud, tex_ud, u0, v0, u1, v1, r, g, b, a, z_opt): (
+                usize,
+                AnyUserData,
+                AnyUserData,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                f32,
+                Option<f32>,
+            )| {
+                let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
+                let sb = s_ud.borrow::<SpriteBuffer>()?;
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *sb.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let entity_id = id_ud.borrow::<EntityId>()?.0;
+                let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
+                let mut rows = sb.rows.borrow_mut();
+                rows[idx] = SpriteData {
+                    entity_id,
+                    texture_id,
+                    uv: [u0, v0, u1, v1],
+                    color: [r, g, b, a],
+                    z: z_opt.unwrap_or(0.0),
+                };
+                let mut l = sb.len.borrow_mut();
+                if i > *l {
+                    *l = i;
+                }
+                Ok(())
+            },
+        );
+        methods.add_method_mut(
+            "sprite_uv",
+            |lua, this, (i, id_ud, u0, v0, u1, v1): (usize, AnyUserData, f32, f32, f32, f32)| {
+                let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
+                let sb = s_ud.borrow::<SpriteBuffer>()?;
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *sb.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let entity_id = id_ud.borrow::<EntityId>()?.0;
+                let mut rows = sb.rows.borrow_mut();
+                let row = &mut rows[idx];
+                row.entity_id = entity_id;
+                row.uv = [u0, v0, u1, v1];
+                let mut l = sb.len.borrow_mut();
+                if i > *l {
+                    *l = i;
+                }
+                Ok(())
+            },
+        );
+        methods.add_method_mut(
+            "sprite_color",
+            |lua, this, (i, r, g, b, a): (usize, f32, f32, f32, f32)| {
+                let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
+                let sb = s_ud.borrow::<SpriteBuffer>()?;
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *sb.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let mut rows = sb.rows.borrow_mut();
+                let row = &mut rows[idx];
+                row.color = [r, g, b, a];
+                // length unchanged; no entity/tex set here
+                Ok(())
+            },
+        );
+        methods.add_method_mut(
+            "sprite_named",
+            |lua,
+             this,
+             (i, id_ud, atlas_ud, name, r, g, b, a, z_opt): (
+                usize,
+                AnyUserData,
+                AnyUserData,
+                String,
+                f32,
+                f32,
+                f32,
+                f32,
+                Option<f32>,
+            )| {
+                let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
+                let sb = s_ud.borrow::<SpriteBuffer>()?;
+                let idx = i
+                    .checked_sub(1)
+                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+                let cap = *sb.cap.borrow();
+                if idx >= cap {
+                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+                }
+                let entity_id = id_ud.borrow::<EntityId>()?.0;
+                let atlas = atlas_ud.borrow::<Atlas>()?;
+                let uv = atlas.uv_map.get(&name).ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!("unknown atlas name: {}", name))
+                })?;
+                let mut rows = sb.rows.borrow_mut();
+                rows[idx] = SpriteData {
+                    entity_id,
+                    texture_id: atlas.texture.0,
+                    uv: [uv[0], uv[1], uv[2], uv[3]],
+                    color: [r, g, b, a],
+                    z: z_opt.unwrap_or(0.0),
+                };
+                let mut l = sb.len.borrow_mut();
+                if i > *l {
+                    *l = i;
+                }
+                Ok(())
+            },
+        );
         methods.add_method("commit", |lua, this, ()| {
             // engine.set_transforms(T); engine.submit_sprites(S)
             let globals = lua.globals();

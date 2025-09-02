@@ -170,7 +170,7 @@ pub struct SpriteRenderer {
     textures: Vec<Option<Texture>>,
     texture_bind_groups: Vec<Option<wgpu::BindGroup>>,
     white_texture: Texture,
-    
+
     // Batches for per-texture draws
     batches: Vec<DrawBatch>,
     last_draw_calls: u32,
@@ -228,7 +228,7 @@ impl SpriteRenderer {
 
         // Use a standard format for headless rendering
         let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        
+
         // Create a dummy config for headless mode
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -306,7 +306,6 @@ impl SpriteRenderer {
         config: wgpu::SurfaceConfiguration,
         surface: Option<wgpu::Surface<'static>>,
     ) -> Result<Self> {
-
         // Create white texture for solid color sprites
         let white_texture = Self::create_white_texture(&device, &queue)?;
 
@@ -535,8 +534,11 @@ impl SpriteRenderer {
 
     fn update_projection_matrix_for(&self, w: u32, h: u32) {
         let projection = Mat4::orthographic_lh(0.0, w as f32, 0.0, h as f32, -1000.0, 1000.0);
-        self.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&projection.to_cols_array()));
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::cast_slice(&projection.to_cols_array()),
+        );
     }
 
     pub fn load_texture(&mut self, texture_id: u32, bytes: &[u8], label: &str) -> Result<()> {
@@ -633,8 +635,11 @@ impl SpriteRenderer {
     }
 
     pub fn render(&mut self) -> Result<()> {
-        let surface = self.surface.as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Cannot render to screen without a surface (use new() instead of new_headless())"))?;
+        let surface = self.surface.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Cannot render to screen without a surface (use new() instead of new_headless())"
+            )
+        })?;
         let output = surface.get_current_texture()?;
         let view = output
             .texture
@@ -699,26 +704,20 @@ impl SpriteRenderer {
                 pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
                 // This bind group is only needed if there are sprites with no texture
-                let white_bind_group =
-                    self.device
-                        .create_bind_group(&wgpu::BindGroupDescriptor {
-                            layout: &self.texture_bind_group_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: wgpu::BindingResource::TextureView(
-                                        &self.white_texture.view,
-                                    ),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::Sampler(
-                                        &self.white_texture.sampler,
-                                    ),
-                                },
-                            ],
-                            label: Some("white_bg"),
-                        });
+                let white_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.white_texture.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.white_texture.sampler),
+                        },
+                    ],
+                    label: Some("white_bg"),
+                });
 
                 for batch in &self.batches {
                     if let Some(bg) = self.get_bind_group(batch.texture_id) {
@@ -793,35 +792,65 @@ impl SpriteRenderer {
             let ndc_bottom = 1.0 - ((offset_y + scaled_h) / window_h) * 2.0;
 
             let verts = [
-                SpriteVertex { position: [ndc_left, ndc_bottom, 0.0], tex_coords: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
-                SpriteVertex { position: [ndc_right, ndc_bottom, 0.0], tex_coords: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
-                SpriteVertex { position: [ndc_right, ndc_top, 0.0], tex_coords: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
-                SpriteVertex { position: [ndc_left, ndc_top, 0.0], tex_coords: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                SpriteVertex {
+                    position: [ndc_left, ndc_bottom, 0.0],
+                    tex_coords: [0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+                SpriteVertex {
+                    position: [ndc_right, ndc_bottom, 0.0],
+                    tex_coords: [1.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+                SpriteVertex {
+                    position: [ndc_right, ndc_top, 0.0],
+                    tex_coords: [1.0, 0.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+                SpriteVertex {
+                    position: [ndc_left, ndc_top, 0.0],
+                    tex_coords: [0.0, 0.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
             ];
             let indices: [u16; 6] = [0, 1, 2, 2, 3, 0];
 
-            let sampler = if use_linear_scaling { &self.linear_sampler } else { &self.nearest_sampler };
+            let sampler = if use_linear_scaling {
+                &self.linear_sampler
+            } else {
+                &self.nearest_sampler
+            };
             let scene_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 layout: &self.texture_bind_group_layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scene.view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&scene.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
                 ],
                 label: Some("scene_bg_with_sampler"),
             });
 
             present_pass.set_bind_group(1, &scene_bg, &[]);
 
-            let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("present_vbuf"),
-                contents: bytemuck::cast_slice(&verts),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            let ibuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("present_ibuf"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
+            let vbuf = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("present_vbuf"),
+                    contents: bytemuck::cast_slice(&verts),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            let ibuf = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("present_ibuf"),
+                    contents: bytemuck::cast_slice(&indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
             present_pass.set_vertex_buffer(0, vbuf.slice(..));
             present_pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint16);
             present_pass.draw_indexed(0..6, 0, 0..1);
@@ -844,24 +873,44 @@ impl SpriteRenderer {
             let ndc_bottom = 1.0 - ((y + h) / win_h) * 2.0;
 
             let verts = [
-                SpriteVertex { position: [ndc_left, ndc_bottom, 0.0], tex_coords: [0.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
-                SpriteVertex { position: [ndc_right, ndc_bottom, 0.0], tex_coords: [1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0] },
-                SpriteVertex { position: [ndc_right, ndc_top, 0.0], tex_coords: [1.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
-                SpriteVertex { position: [ndc_left, ndc_top, 0.0], tex_coords: [0.0, 0.0], color: [1.0, 1.0, 1.0, 1.0] },
+                SpriteVertex {
+                    position: [ndc_left, ndc_bottom, 0.0],
+                    tex_coords: [0.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+                SpriteVertex {
+                    position: [ndc_right, ndc_bottom, 0.0],
+                    tex_coords: [1.0, 1.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+                SpriteVertex {
+                    position: [ndc_right, ndc_top, 0.0],
+                    tex_coords: [1.0, 0.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
+                SpriteVertex {
+                    position: [ndc_left, ndc_top, 0.0],
+                    tex_coords: [0.0, 0.0],
+                    color: [1.0, 1.0, 1.0, 1.0],
+                },
             ];
             let indices: [u16; 6] = [0, 1, 2, 2, 3, 0];
 
             present_pass.set_bind_group(1, hud_bg, &[]);
-            let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("hud_vbuf"),
-                contents: bytemuck::cast_slice(&verts),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            let ibuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("hud_ibuf"),
-                contents: bytemuck::cast_slice(&indices),
-                usage: wgpu::BufferUsages::INDEX,
-            });
+            let vbuf = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("hud_vbuf"),
+                    contents: bytemuck::cast_slice(&verts),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            let ibuf = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("hud_ibuf"),
+                    contents: bytemuck::cast_slice(&indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
             present_pass.set_vertex_buffer(0, vbuf.slice(..));
             present_pass.set_index_buffer(ibuf.slice(..), wgpu::IndexFormat::Uint16);
             present_pass.draw_indexed(0..6, 0, 0..1);
@@ -875,10 +924,13 @@ impl SpriteRenderer {
     }
 
     // Headless rendering method - renders to virtual canvas and returns pixel data for testing
-    pub fn render_to_virtual_canvas(&mut self, engine_state: &crate::state::EngineState) -> Result<Vec<u8>> {
+    pub fn render_to_virtual_canvas(
+        &mut self,
+        engine_state: &crate::state::EngineState,
+    ) -> Result<Vec<u8>> {
         // Ensure scene texture exists for current virtual mode
         self.ensure_scene_texture(engine_state)?;
-        
+
         // Clear previous frame data
         self.sprite_vertices.clear();
         self.sprite_indices.clear();
@@ -925,7 +977,12 @@ impl SpriteRenderer {
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear({
                             let cc = engine_state.get_clear_color();
-                            wgpu::Color { r: cc[0] as f64, g: cc[1] as f64, b: cc[2] as f64, a: cc[3] as f64 }
+                            wgpu::Color {
+                                r: cc[0] as f64,
+                                g: cc[1] as f64,
+                                b: cc[2] as f64,
+                                a: cc[3] as f64,
+                            }
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -941,26 +998,20 @@ impl SpriteRenderer {
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
 
-                let white_bind_group =
-                    self.device
-                        .create_bind_group(&wgpu::BindGroupDescriptor {
-                            layout: &self.texture_bind_group_layout,
-                            entries: &[
-                                wgpu::BindGroupEntry {
-                                    binding: 0,
-                                    resource: wgpu::BindingResource::TextureView(
-                                        &self.white_texture.view,
-                                    ),
-                                },
-                                wgpu::BindGroupEntry {
-                                    binding: 1,
-                                    resource: wgpu::BindingResource::Sampler(
-                                        &self.white_texture.sampler,
-                                    ),
-                                },
-                            ],
-                            label: Some("white_bg"),
-                        });
+                let white_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &self.texture_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&self.white_texture.view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.white_texture.sampler),
+                        },
+                    ],
+                    label: Some("white_bg"),
+                });
 
                 for batch in &self.batches {
                     if let Some(bg) = self.get_bind_group(batch.texture_id) {
@@ -981,34 +1032,38 @@ impl SpriteRenderer {
             let (vw, vh) = self.virtual_size;
             let bytes_per_pixel = 4u32;
             let output_size = (vw * vh * bytes_per_pixel) as u64;
-            
+
             let staging = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("readback"),
                 size: output_size,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            
+
             encoder.copy_texture_to_buffer(
-                wgpu::ImageCopyTexture { 
-                    texture: &scene.texture, 
-                    mip_level: 0, 
-                    origin: wgpu::Origin3d::ZERO, 
-                    aspect: wgpu::TextureAspect::All 
+                wgpu::ImageCopyTexture {
+                    texture: &scene.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
                 },
-                wgpu::ImageCopyBuffer { 
-                    buffer: &staging, 
-                    layout: wgpu::ImageDataLayout { 
-                        offset: 0, 
-                        bytes_per_row: Some(vw * bytes_per_pixel), 
-                        rows_per_image: Some(vh) 
-                    } 
+                wgpu::ImageCopyBuffer {
+                    buffer: &staging,
+                    layout: wgpu::ImageDataLayout {
+                        offset: 0,
+                        bytes_per_row: Some(vw * bytes_per_pixel),
+                        rows_per_image: Some(vh),
+                    },
                 },
-                wgpu::Extent3d { width: vw, height: vh, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: vw,
+                    height: vh,
+                    depth_or_array_layers: 1,
+                },
             );
-            
+
             self.queue.submit(Some(encoder.finish()));
-            
+
             let buffer_slice = staging.slice(..);
             buffer_slice.map_async(wgpu::MapMode::Read, move |_| {});
             self.device.poll(wgpu::Maintain::Wait);
@@ -1027,7 +1082,12 @@ impl SpriteRenderer {
     ) -> Result<()> {
         // Sync clear color from engine state
         let cc = engine_state.get_clear_color();
-        self.clear_color = wgpu::Color { r: cc[0] as f64, g: cc[1] as f64, b: cc[2] as f64, a: cc[3] as f64 };
+        self.clear_color = wgpu::Color {
+            r: cc[0] as f64,
+            g: cc[1] as f64,
+            b: cc[2] as f64,
+            a: cc[3] as f64,
+        };
         self.virtual_mode = engine_state.get_virtual_resolution();
         // Ensure scene texture exists for current virtual mode
         self.ensure_scene_texture(engine_state)?;
@@ -1038,40 +1098,70 @@ impl SpriteRenderer {
         // Update transforms
         self.set_transforms_v2(engine_state.get_transforms())?;
 
-        // Group by texture id, build vertices/indices per group, and track batches
+        // Sort sprites by z-coordinate first, then group consecutive sprites with same texture
         self.batches.clear();
-        use std::collections::BTreeMap;
         let sprites = engine_state.get_sprites();
-        let mut by_tex: BTreeMap<u32, Vec<&crate::state::SpriteData>> = BTreeMap::new();
-        for sd in sprites.iter() {
-            if self.transforms.contains_key(&sd.entity_id) {
-                by_tex.entry(sd.texture_id).or_default().push(sd);
+
+        // Filter sprites that have transforms and sort by z-coordinate
+        let mut sorted_sprites: Vec<&crate::state::SpriteData> = sprites
+            .iter()
+            .filter(|sd| self.transforms.contains_key(&sd.entity_id))
+            .collect();
+        sorted_sprites.sort_by(|a, b| a.z.partial_cmp(&b.z).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut sprite_idx = 0usize;
+        let mut current_batch_texture = None;
+        let mut current_batch_start = 0u32;
+
+        for sd in sorted_sprites.into_iter() {
+            // Ensure texture and bind group cache
+            if let Some(bytes) = engine_state.get_texture(sd.texture_id) {
+                self.ensure_texture_cached(sd.texture_id, bytes)?;
+            }
+
+            if let Some(transform) = self.transforms.get(&sd.entity_id) {
+                // Check if we need to start a new batch (different texture or first sprite)
+                if current_batch_texture != Some(sd.texture_id) {
+                    // Finish previous batch if it exists
+                    if let Some(tex_id) = current_batch_texture {
+                        let end = self.sprite_indices.len() as u32;
+                        if end > current_batch_start {
+                            self.batches.push(DrawBatch {
+                                texture_id: tex_id,
+                                start_index: current_batch_start,
+                                index_count: end - current_batch_start,
+                            });
+                        }
+                    }
+                    // Start new batch
+                    current_batch_texture = Some(sd.texture_id);
+                    current_batch_start = self.sprite_indices.len() as u32;
+                }
+
+                let sprite_instance = SpriteInstance {
+                    entity_id: sd.entity_id,
+                    texture_id: sd.texture_id,
+                    position: transform.position,
+                    rotation: transform.rotation,
+                    size: transform.size, // Use direct pixel size
+                    uv_rect: Vec4::new(sd.uv[0], sd.uv[1], sd.uv[2], sd.uv[3]),
+                    color: Vec4::new(sd.color[0], sd.color[1], sd.color[2], sd.color[3]),
+                };
+                self.add_sprite_to_batch(sprite_instance, sprite_idx)?;
+                sprite_idx += 1;
             }
         }
-        let mut sprite_idx = 0usize;
-        for (tex_id, list) in by_tex.into_iter() {
-            let start = self.sprite_indices.len() as u32;
-            // Ensure texture and bind group cache
-            if let Some(bytes) = engine_state.get_texture(tex_id) {
-                self.ensure_texture_cached(tex_id, bytes)?;
-            }
-            for sd in list.into_iter() {
-                if let Some(transform) = self.transforms.get(&sd.entity_id) {
-                    let sprite_instance = SpriteInstance {
-                        entity_id: sd.entity_id,
-                        texture_id: sd.texture_id,
-                        position: transform.position,
-                        rotation: transform.rotation,
-                        size: transform.size, // Use direct pixel size
-                        uv_rect: Vec4::new(sd.uv[0], sd.uv[1], sd.uv[2], sd.uv[3]),
-                        color: Vec4::new(sd.color[0], sd.color[1], sd.color[2], sd.color[3]),
-                    };
-                    self.add_sprite_to_batch(sprite_instance, sprite_idx)?;
-                    sprite_idx += 1;
-                }
-            }
+
+        // Finish final batch if it exists
+        if let Some(tex_id) = current_batch_texture {
             let end = self.sprite_indices.len() as u32;
-            self.batches.push(DrawBatch { texture_id: tex_id, start_index: start, index_count: end - start });
+            if end > current_batch_start {
+                self.batches.push(DrawBatch {
+                    texture_id: tex_id,
+                    start_index: current_batch_start,
+                    index_count: end - current_batch_start,
+                });
+            }
         }
         self.last_draw_calls = self.batches.len() as u32;
 
@@ -1095,34 +1185,52 @@ impl SpriteRenderer {
         if recreate {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("scene_texture"),
-                size: wgpu::Extent3d { width: vw, height: vh, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: vw,
+                    height: vh,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: self.config.format, // Must match render pipeline format
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let scene_sampler = self.device.create_sampler(&wgpu::SamplerDescriptor::default());
-            self.scene_texture = Some(Texture { texture, view, sampler: scene_sampler });
+            let scene_sampler = self
+                .device
+                .create_sampler(&wgpu::SamplerDescriptor::default());
+            self.scene_texture = Some(Texture {
+                texture,
+                view,
+                sampler: scene_sampler,
+            });
             self.virtual_size = (vw, vh);
 
             // Update the bind group as well
             if let Some(scene) = &self.scene_texture {
-                self.scene_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    layout: &self.texture_bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&scene.view) },
-                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.nearest_sampler) },
-                    ],
-                    label: Some("scene_bind_group"),
-                }));
+                self.scene_bind_group =
+                    Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        layout: &self.texture_bind_group_layout,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&scene.view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::Sampler(&self.nearest_sampler),
+                            },
+                        ],
+                        label: Some("scene_bind_group"),
+                    }));
             }
         }
         Ok(())
     }
-
 
     pub fn get_sprite_count(&self) -> u32 {
         (self.sprite_vertices.len() / 4) as u32
@@ -1139,7 +1247,8 @@ impl SpriteRenderer {
             self.texture_bind_groups.resize_with(slot + 1, || None);
         }
         if self.textures[slot].is_none() {
-            let tex = Texture::from_bytes(&self.device, &self.queue, bytes, &format!("tex_{}", tex_id))?;
+            let tex =
+                Texture::from_bytes(&self.device, &self.queue, bytes, &format!("tex_{}", tex_id))?;
             self.textures[slot] = Some(tex);
         }
         if self.texture_bind_groups[slot].is_none() {
@@ -1147,8 +1256,14 @@ impl SpriteRenderer {
             let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 layout: &self.texture_bind_group_layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&t.view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&t.sampler) },
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&t.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&t.sampler),
+                    },
                 ],
                 label: Some("sprite_texture_bind_group"),
             });
@@ -1170,7 +1285,11 @@ impl SpriteRenderer {
         // Create texture and bind group for HUD panel
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hud_texture"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1179,22 +1298,47 @@ impl SpriteRenderer {
             view_formats: &[],
         });
         self.queue.write_texture(
-            wgpu::ImageCopyTexture { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::ImageCopyTexture {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             rgba,
-            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor::default());
+        let sampler = self
+            .device
+            .create_sampler(&wgpu::SamplerDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &self.texture_bind_group_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
             ],
             label: Some("hud_bind_group"),
         });
-        self.hud_texture = Some(Texture { texture, view, sampler });
+        self.hud_texture = Some(Texture {
+            texture,
+            view,
+            sampler,
+        });
         self.hud_bind_group = Some(bind_group);
         self.hud_size = (w, h);
         Ok(())

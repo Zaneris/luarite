@@ -8,6 +8,7 @@ pub struct SpriteData {
     pub texture_id: u32,
     pub uv: [f32; 4],    // u0, v0, u1, v1
     pub color: [f32; 4], // r, g, b, a
+    pub z: f32,          // z-index for sorting
 }
 
 /// Central engine state that owns all game resources
@@ -106,7 +107,7 @@ impl EngineState {
     pub fn set_transforms(&mut self, transforms: Vec<f64>) -> Result<()> {
         if transforms.len() % 6 != 0 {
             return Err(anyhow::anyhow!(
-                "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)", 
+                "ARG_ERROR: set_transforms stride mismatch (got={}, want=6)",
                 transforms.len() % 6
             ));
         }
@@ -151,7 +152,8 @@ impl EngineState {
         let max_entities = 10_000usize;
         let elems = transforms.len().min(max_entities * 6);
         self.transform_buffer.clear();
-        self.transform_buffer.extend_from_slice(&transforms[..elems]);
+        self.transform_buffer
+            .extend_from_slice(&transforms[..elems]);
         self.ffi_calls_this_frame += 1;
         tracing::debug!("Set {} transforms (f32)", elems / 6);
         Ok(())
@@ -221,7 +223,16 @@ impl EngineState {
     pub fn restore_lua_sprite_vec(&mut self, script_vec: &mut Vec<SpriteData>, cap: usize) {
         std::mem::swap(&mut self.sprites_back, script_vec);
         if script_vec.len() < cap {
-            script_vec.resize(cap, SpriteData { entity_id: 0, texture_id: 0, uv: [0.0;4], color: [0.0;4] });
+            script_vec.resize(
+                cap,
+                SpriteData {
+                    entity_id: 0,
+                    texture_id: 0,
+                    uv: [0.0; 4],
+                    color: [0.0; 4],
+                    z: 0.0,
+                },
+            );
         }
     }
 

@@ -1,6 +1,6 @@
+use crate::input::InputState;
 use crate::metrics::MetricsCollector;
 use crate::renderer::SpriteRenderer;
-use crate::input::InputState;
 use crate::state::EngineState;
 use crate::time::FixedTimeStep;
 use anyhow::Result;
@@ -91,7 +91,6 @@ impl EngineWindow {
         self.on_end_frame = Some(Box::new(f));
     }
 
-
     pub fn input_handle(&self) -> std::sync::Arc<std::sync::Mutex<InputState>> {
         self.input.clone()
     }
@@ -118,7 +117,7 @@ impl ApplicationHandler for EngineWindow {
                 Ok(window) => {
                     let window_arc = Arc::new(window);
                     tracing::info!("Window created successfully");
-                    
+
                     // Initialize renderer (this is async, we'll handle it in about_to_wait)
                     self.window = Some(window_arc);
                     // Initialize engine_state window size
@@ -148,11 +147,12 @@ impl ApplicationHandler for EngineWindow {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(physical_size);
                 }
-                self.engine_state.set_window_size(physical_size.width, physical_size.height);
+                self.engine_state
+                    .set_window_size(physical_size.width, physical_size.height);
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if let Ok(mut input) = self.input.lock() {
-                    input.set_mouse_pos(position.x as f64, position.y as f64);
+                    input.set_mouse_pos(position.x, position.y);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -188,9 +188,9 @@ impl ApplicationHandler for EngineWindow {
                     }
                 }
 
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
             }
             _ => {}
         }
@@ -265,12 +265,16 @@ impl ApplicationHandler for EngineWindow {
                 tracing::error!("Failed to update renderer from engine state: {}", e);
             }
             // Record draw calls and sprites planned for this frame
-            self.metrics.record_draws(renderer.get_draw_call_count(), renderer.get_sprite_count());
+            self.metrics
+                .record_draws(renderer.get_draw_call_count(), renderer.get_sprite_count());
 
             // Update HUD overlay if we have lines
             if let Some(lines) = &self.hud_lines {
                 if let Ok(l) = lines.lock() {
-                    let (rgba, w, h) = crate::hud::rasterize_hud(&l.iter().cloned().collect::<Vec<_>>(), &self.metrics);
+                    let (rgba, w, h) = crate::hud::rasterize_hud(
+                        &l.iter().cloned().collect::<Vec<_>>(),
+                        &self.metrics,
+                    );
                     let _ = renderer.set_hud_rgba(&rgba, w, h);
                 }
             }

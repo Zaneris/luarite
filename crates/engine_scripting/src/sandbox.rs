@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mlua::{Function, Lua, Table, Value, Variadic};
+use mlua::{Function, Lua, Table, Value};
 
 pub struct LuaSandbox {
     lua: Lua,
@@ -26,14 +26,20 @@ impl LuaSandbox {
         ] {
             if let Ok(v) = globals.get::<Value>(name) {
                 if let Err(e) = safe.set(name, v) {
-                    return Err(anyhow::Error::msg(format!("safe.set {} failed: {}", name, e)));
+                    return Err(anyhow::Error::msg(format!(
+                        "safe.set {} failed: {}",
+                        name, e
+                    )));
                 }
             }
         }
         for lib in ["math", "table", "utf8"] {
             if let Ok(v) = globals.get::<Value>(lib) {
                 if let Err(e) = safe.set(lib, v) {
-                    return Err(anyhow::Error::msg(format!("safe.set {} failed: {}", lib, e)));
+                    return Err(anyhow::Error::msg(format!(
+                        "safe.set {} failed: {}",
+                        lib, e
+                    )));
                 }
             }
         }
@@ -49,7 +55,10 @@ impl LuaSandbox {
 
         // Store safe_base for use when loading scripts
         if let Err(e) = self.lua.set_named_registry_value("safe_base", safe) {
-            return Err(anyhow::Error::msg(format!("set_named_registry_value failed: {}", e)));
+            return Err(anyhow::Error::msg(format!(
+                "set_named_registry_value failed: {}",
+                e
+            )));
         }
         Ok(())
     }
@@ -154,16 +163,17 @@ impl LuaSandbox {
 "#;
         self.lua
             .load(math_random_shim)
-            .set_name("math.random shim").map_err(|e| anyhow::anyhow!(e.to_string()))?
-            .set_environment(env.clone()).map_err(|e| anyhow::anyhow!(e.to_string()))?
-            .exec().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            .set_name("math.random shim")
+            .set_environment(env.clone())
+            .exec()
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Load and run chunk in this environment
         let chunk = self.lua.load(script_content).set_name(script_name);
         let chunk = chunk.set_environment(env.clone());
-        chunk
-            .exec()
-            .map_err(|e| anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e)))?;
+        chunk.exec().map_err(|e| {
+            anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e))
+        })?;
 
         // Remember current env for function lookups
         self.lua
@@ -213,16 +223,17 @@ impl LuaSandbox {
 "#;
         self.lua
             .load(math_random_shim)
-            .set_name("math.random shim").map_err(|e| anyhow::anyhow!(e.to_string()))?
-            .set_environment(env.clone()).map_err(|e| anyhow::anyhow!(e.to_string()))?
-            .exec().map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            .set_name("math.random shim")
+            .set_environment(env.clone())
+            .exec()
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Load script into new env
         let chunk = self.lua.load(script_content).set_name(script_name);
         let chunk = chunk.set_environment(env.clone());
-        chunk
-            .exec()
-            .map_err(|e| anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e)))?;
+        chunk.exec().map_err(|e| {
+            anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e))
+        })?;
 
         // Call new env's on_start() first to (re)initialize arrays/tables
         if let Ok(on_start) = env.get::<mlua::Function>("on_start") {

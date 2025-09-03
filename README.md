@@ -33,7 +33,7 @@ engine.end_frame()
 
 ```bash
 # Clone and run the demo
-git clone https://github.com/your-org/luarite
+git clone https://github.com/Zaneris/luarite
 cd luarite
 cargo run -p luarite
 

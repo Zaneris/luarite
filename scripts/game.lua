@@ -1,4 +1,4 @@
--- Pong demo using typed buffers (QoL)
+-- Pong demo using sugar drawing API
 
 assert(engine.api_version == 1)
 
@@ -6,8 +6,6 @@ local K = engine.keys
 
 -- Deterministic RNG for replay
 engine.seed(1337)
-
-
 
 -- Virtual canvas coordinates (320x180)
 local w, h = 320, 180
@@ -25,10 +23,11 @@ local vx, vy     = BASE_VX, BASE_VY
 local score_l, score_r = 0, 0
 local hud_t = 0.0
 
--- Typed buffers (capacity 4 - added background)
-local T = engine.create_transform_buffer(4)
-local S = engine.create_sprite_buffer(4)
-local fb
+-- Colors using helper functions
+local bg_color = engine.rgba(26, 26, 26, 255)      -- Dark gray background
+local paddle_l_color = engine.rgba(51, 204, 51, 255)  -- Green left paddle  
+local paddle_r_color = engine.rgba(51, 51, 204, 255)  -- Blue right paddle
+local ball_color = engine.rgba(230, 230, 51, 255)     -- Yellow ball
 
 local function reset_ball()
   bx, by = w*0.5, h*0.5
@@ -64,13 +63,6 @@ function on_start()
   px_l, py_l = 20.0, h*0.5
   px_r, py_r = w-20.0, h*0.5
   reset_ball()
-
-  -- Static sprite attributes set once with z-values for proper depth ordering
-  S:set_tex(1, background, tex); S:set_color(1, 0.1,0.1,0.1,1.0); S:set_uv_rect(1, 0.0,0.0,1.0,1.0); S:set_z(1, -1.0) -- Background behind everything
-  S:set_tex(2, paddle_l, tex); S:set_color(2, 0.2,0.8,0.2,1.0); if atlas then S:set_named_uv(2, atlas, "paddle") else S:set_uv_rect(2, 0.0,0.0,1.0,1.0) end; S:set_z(2, 0.0) -- Paddles on main layer
-  S:set_tex(3, paddle_r, tex); S:set_color(3, 0.2,0.2,0.8,1.0); if atlas then S:set_named_uv(3, atlas, "paddle") else S:set_uv_rect(3, 0.0,0.0,1.0,1.0) end; S:set_z(3, 0.0) -- Paddles on main layer
-  S:set_tex(4, ball,     tex); S:set_color(4, 0.9,0.9,0.2,1.0); if atlas then S:set_named_uv(4, atlas, "ball")   else S:set_uv_rect(4, 0.0,0.0,1.0,1.0) end; S:set_z(4, 1.0) -- Ball in front
-  fb = engine.frame_builder(T, S)
 end
 
 function on_update(dt)
@@ -97,12 +89,87 @@ function on_update(dt)
   if bx < -20 then score_r = score_r + 1; reset_ball()
   elseif bx > w + 20 then score_l = score_l + 1; reset_ball() end
 
-  -- Fill transforms via builder and commit once
-  fb:transform(1, background, w*0.5, h*0.5, 0, w, h) -- Full 320x180 gray background
-  fb:transform(2, paddle_l, px_l, py_l, 0, PADDLE_W, PADDLE_H)
-  fb:transform(3, paddle_r, px_r, py_r, 0, PADDLE_W, PADDLE_H)
-  fb:transform(4, ball,     bx,   by,   0, BALL_SIZE, BALL_SIZE)
-  fb:commit()
+  -- Draw using sugar API
+  engine.begin_frame()
+  
+  -- Background
+  engine.sprite{
+    entity = background,
+    texture = tex,
+    pos = {w*0.5, h*0.5},
+    size = {w, h},
+    color = bg_color,
+    uv = {0, 0, 1, 1},
+    z = -1
+  }
+  
+  -- Left paddle (green)
+  if atlas then
+    engine.sprite{
+      entity = paddle_l,
+      atlas = {ref = atlas, name = "paddle"},
+      pos = {px_l, py_l},
+      size = {PADDLE_W, PADDLE_H},
+      color = paddle_l_color,
+      z = 0
+    }
+  else
+    engine.sprite{
+      entity = paddle_l,
+      texture = tex,
+      pos = {px_l, py_l},
+      size = {PADDLE_W, PADDLE_H},
+      color = paddle_l_color,
+      uv = {0, 0, 1, 1},
+      z = 0
+    }
+  end
+  
+  -- Right paddle (blue)
+  if atlas then
+    engine.sprite{
+      entity = paddle_r,
+      atlas = {ref = atlas, name = "paddle"},
+      pos = {px_r, py_r},
+      size = {PADDLE_W, PADDLE_H},
+      color = paddle_r_color,
+      z = 0
+    }
+  else
+    engine.sprite{
+      entity = paddle_r,
+      texture = tex,
+      pos = {px_r, py_r},
+      size = {PADDLE_W, PADDLE_H},
+      color = paddle_r_color,
+      uv = {0, 0, 1, 1},
+      z = 0
+    }
+  end
+  
+  -- Ball (yellow)
+  if atlas then
+    engine.sprite{
+      entity = ball,
+      atlas = {ref = atlas, name = "ball"},
+      pos = {bx, by},
+      size = BALL_SIZE,
+      color = ball_color,
+      z = 1
+    }
+  else
+    engine.sprite{
+      entity = ball,
+      texture = tex,
+      pos = {bx, by},
+      size = BALL_SIZE,
+      color = ball_color,
+      uv = {0, 0, 1, 1},
+      z = 1
+    }
+  end
+  
+  engine.end_frame()
 
   hud_t = hud_t + dt
   if hud_t >= 1.0 then

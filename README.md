@@ -1,187 +1,243 @@
-# Luarite — Rust + Lua 2D Engine
+# Luarite 🚀
 
-Luarite is a compact, batched **2D game engine** with a **Rust** core and a **sandboxed Lua 5.4** scripting layer. It’s built for **predictable performance** and **developer ergonomics**: a tiny, stable API; **typed buffers** for transforms and sprites; one-shot batched submission each frame; and guardrails for **safety**, **determinism**, and **zero steady-state allocations**.
+> **Rust-powered 2D game engine with elegant Lua scripting**
 
-The renderer targets a **virtual canvas** so projects look consistent on any display. Author in HD and scale with letterboxing, or switch to **pixel-perfect integer scaling** with point sampling for a retro look—while UI/text remain razor sharp. Under the hood it uses `winit` for window/input, `wgpu` for cross-API rendering, `glam` for math, and `tracing` for structured logs plus a built-in HUD (FPS, p99, sprites, FFI).
+Luarite combines the **performance of Rust** with the **simplicity of Lua** to create beautiful 2D games. Write your game logic in expressive Lua while the engine handles rendering, input, and performance optimization under the hood.
 
-Luarite is intentionally minimal: **Y-up** coordinates, f32 transforms, sprite atlases, and a narrow FFI surface designed around **handles and batches**. It includes **hot-reload**, **record/replay** for deterministic debugging, and an **offscreen renderer** for GPU-free end-to-end tests.
+```lua
+-- Beautiful, expressive game code
+engine.begin_frame()
 
-> This repository is also an experiment in **AI-assisted development**: to date, no hand-written source has been committed. Code has been generated via tools such as **gemini-cli**, **codex-cli**, and **claude code**, with human intent, constraints, and tests guiding the result.
+engine.sprite{
+  entity = player,
+  texture = atlas,
+  pos = {x, y},
+  size = 32,
+  color = engine.hex("#FF6B6B"),
+  rotation = math.sin(engine.time()),
+  z = 1
+}
 
-## Highlights
-- Rust core: `winit` (window/input), `wgpu` (render), `glam` (math), `tracing` (logs)
-- Lua 5.4 scripting via `mlua` (vendored), strict sandbox (no `require`)
-- Batched API: typed buffers (preferred) with builder; v2 flat arrays still supported
-- Y‑up world coordinates (pixels); f32 transforms; texture‑ID batching
-- On‑screen HUD overlay (FPS, p99, sprites, FFI) with `engine.hud_printf`
-- Offscreen renderer for GPU‑free e2e tests
+engine.end_frame()
+```
 
-## Quick Start
-- Run: `cargo run -p luarite`
-  - Live reloads `scripts/game.lua` on save. Controls for Pong demo: `W/S`, `ArrowUp/ArrowDown`.
-- Build: `cargo build`
-- Record/Replay (determinism): `cargo run -p luarite -- --record out.log` then `--replay out.log`
-- Lint/format: `cargo fmt --all && cargo clippy --all-targets -- -D warnings`
+## ✨ Why Luarite?
 
-The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by default (WARN+).
+**🎨 Expressive** — Write games in beautiful, readable Lua with modern APIs  
+**⚡ Fast** — Rust core with batched rendering and zero-allocation hot paths  
+**🔒 Safe** — Sandboxed scripting with deterministic execution and replay  
+**🎯 Simple** — One API, two render modes, minimal concepts to learn  
+**🔧 Developer-Friendly** — Hot reload, built-in profiling, and rich debugging tools  
 
-## Writing Game Scripts
-- Location: `scripts/game.lua` (default). The host loads from disk and hot‑reloads on file changes.
-  - `require`/`dofile` are disabled in the sandbox; keep logic in one file (or implement your own loader on the host).
-- Lifecycle (define these globals in your script):
-  - `function on_start()` — create entities, load textures, pre‑size arrays
-  - `function on_update(dt)` — update positions/state and submit arrays every frame
-  - Optional (planned hot‑reload): `function on_reload(old_env)`
+## 🚀 Quick Start
 
-### Coordinate System
-- Y‑up: origin at bottom-left, +Y is up.
-- All coordinates and dimensions supplied to `set_px` or `transform_px` are in pixels relative to the virtual canvas resolution (e.g., 320x180 for `retro` mode).
+```bash
+# Clone and run the demo
+git clone https://github.com/your-org/luarite
+cd luarite
+cargo run -p luarite
 
-### Engine API (essentials)
-- Entities & textures
-  - `engine.create_entity() -> id`
-  - `engine.load_texture(path) -> tex` (host loads from disk; falls back to white if missing)
-- Batched submission
-  - Typed buffers (preferred):
-    - `local T = engine.create_transform_buffer(cap)` with `T:set(i, id, x, y, rot, sx, sy)` or `T:set_px(i, id, x_px, y_px, rot, w_px, h_px)`; submit via `engine.set_transforms(T)`.
-    - `local S = engine.create_sprite_buffer(cap)` with `S:set(i, id, tex, u0, v0, u1, v1, r, g, b, a)`, `S:set_tex`, `S:set_uv_rect`, `S:set_color`, `S:set_z`, `S:set_named_uv(i, atlas, name)`; submit via `engine.submit_sprites(S)`.
-    - Optional builder: `local fb = engine.frame_builder(T, S)` then `fb:transform(i, id, x,y,rot,sx,sy)`, `fb:transform_px(i, id, x_px,y_px,rot,w_px,h_px)`, `fb:sprite_uv(i, id, u0,v0,u1,v1)`, `fb:sprite_tex(i, id, tex, u0,v0,u1,v1, r,g,b,a)`, `fb:sprite_named(i, id, atlas, name, r,g,b,a)`, `fb:sprite_color(i, r,g,b,a)`, and finalize with `fb:commit()`.
+# Start coding! Edit scripts/game.lua and see changes instantly
+```
+
+The demo is a fully playable Pong game. Use `W/S` and `Arrow Keys` to play!
+
+## 🎮 Your First Game
+
+Create a bouncing ball in just a few lines:
+
+```lua
+assert(engine.api_version == 1)
+
+local ball = engine.create_entity()
+local texture = engine.load_texture("assets/ball.png")
+local x, y = 160, 90
+local vx, vy = 100, 80
+
+function on_start()
+  engine.set_render_mode("retro") -- 320x180 pixel-perfect
+end
+
+function on_update(dt)
+  -- Move ball
+  x, y = x + vx * dt, y + vy * dt
   
-- Time, input, window
-  - `engine.time() -> seconds` (fixed‑step time)
-  - `engine.get_input() -> snapshot` (methods: `down(key)`, `pressed(key)`, `released(key)`, `mouse_pos()`)
-  - `engine.keys` is a table of keycodes, e.g. `engine.keys.KeyW`, `engine.keys.ArrowUp`.
-  - `engine.window_size() -> (w, h)`
-  - `engine.set_render_mode(mode)` (`retro` or `hd`)
-- RNG (deterministic)
-  - `engine.seed(n)` seeds the RNG. `math.random` is automatically shimmed to use this RNG.
-  - `engine.random() -> n` returns a float `0 <= n < 1`.
-  - `engine.random_bool(p=0.5) -> bool` returns true with probability `p`.
-  - `engine.random_range(min, max) -> n` returns a float between min and max.
-- Persistence, metrics, HUD
-  - `engine.persist(key, value)` / `engine.restore(key)` (in‑process KV)
-  - `engine.get_metrics() -> { cpu_frame_ms, sprites_submitted, ffi_calls }`
-  - `engine.hud_printf(msg)` prints a line on the HUD (rate‑limited)
-  - `engine.log(level, msg)` (`info|warn|error|debug`, rate‑limited)
+  -- Bounce off walls
+  if x < 16 or x > 304 then vx = -vx end
+  if y < 16 or y > 164 then vy = -vy end
+  
+  -- Draw with beautiful API
+  engine.begin_frame()
+  engine.sprite{
+    entity = ball,
+    texture = texture,
+    pos = {x, y},
+    size = 32,
+    color = engine.rgba(255, 255, 255, 255),
+    z = 1
+  }
+  engine.end_frame()
+end
+```
 
-### Rendering
-- `engine.set_render_mode(mode)`: Sets the virtual canvas resolution. Supports two modes:
-  - `"retro"`: A 320x180 virtual canvas that is always integer-scaled to fit the window, preserving a pixel-perfect look.
-  - `"hd"`: A 1920x1080 virtual canvas. It will use integer scaling if the window is close (within 5%) to a multiple of 1080p (e.g., 4K). Otherwise, it uses linear filtering for smooth scaling.
-- **Depth Sorting**: Sprites are automatically sorted by their z-value before rendering. Higher z-values appear on top of lower z-values, regardless of submission order. Use `S:set_z(index, z_value)` to control draw order.
+## 🌈 Rich Color Support
 
-### Minimal Script Skeleton
+Luarite provides multiple ways to work with colors:
+
 ```lua
-assert(engine.api_version == 1)
+-- RGB with alpha
+local red = engine.rgba(255, 0, 0, 255)
 
+-- Hex colors (CSS-style)  
+local blue = engine.hex("#3498DB")
+local green = engine.hex("#2ECC71FF") -- With alpha
+
+-- HSV color space
+local rainbow = engine.hsv(hue, 0.8, 0.9)
+
+-- Raw hex integers
+engine.sprite{
+  entity = star,
+  color = 0xFFD700FF, -- Gold
+  -- ... other properties
+}
+```
+
+## 🎯 Key Features
+
+### 🖼️ Dual Rendering Modes
+- **Retro Mode** (`320×180`) — Pixel-perfect integer scaling for that authentic retro feel
+- **HD Mode** (`1920×1080`) — Crisp modern graphics with smart scaling
+
+### 🎨 Modern Drawing API
+- **Sugar API** — Express your vision with readable, declarative sprite calls
+- **Typed Buffers** — High-performance batch rendering for advanced use cases
+- **Atlas Support** — Efficient texture atlasing with named sprites
+
+### 🔐 Rock-Solid Foundation
+- **Deterministic** — Perfect for replays, testing, and competitive games
+- **Sandboxed Lua** — Safe scripting environment with controlled access
+- **Hot Reload** — Instant feedback during development
+
+### 🛠️ Developer Experience
+- **Built-in Profiler** — Real-time performance metrics in your game
+- **Input Recording** — Record and replay sessions for debugging
+- **Comprehensive Logging** — Structured logging with filtering
+
+## 📖 Core Concepts
+
+### Entities & Resources
+```lua
+local player = engine.create_entity()
+local texture = engine.load_texture("sprites/hero.png")
+local atlas = engine.atlas_load("sprites/atlas.png", "sprites/atlas.json")
+```
+
+### Input Handling
+```lua
 local K = engine.keys
-local T, S, e, tex, fb
+local input = engine.get_input()
 
-function on_start()
-  engine.set_render_mode("retro")
-  e = engine.create_entity()
-  tex = engine.load_texture("assets/atlas.png")
-  T = engine.create_transform_buffer(1)
-  S = engine.create_sprite_buffer(1)
-  T:set(1, e, 100, 100, 0.0, 32, 32)
-  S:set_z(1, 0.0) -- set z-depth for draw order
-  fb = engine.frame_builder(T, S)
-  fb:sprite_tex(1, e, tex, 0.0,0.0,1.0,1.0, 1.0,1.0,1.0,1.0)
-  fb:commit() -- commit once to make sprite visible
-end
+if input:down(K.KeyW) then y = y + speed * dt end
+if input:pressed(K.Space) then fire_bullet() end
 
-function on_update(dt)
-  local inp = engine.get_input()
-  if inp:pressed(K.Space) then
-    -- Every spacebar press, move to random location
-    local x = engine.random_range(32, 320-32)
-    local y = engine.random_range(32, 180-32)
-    T:set(1, e, x, y, 0.0, 32, 32)
-    fb:commit()
-  end
-end
+local mx, my = input:mouse_pos()
 ```
-### Atlas + Builder Example
+
+### Time & Animation
 ```lua
-assert(engine.api_version == 1)
+-- Smooth animations
+local wobble = math.sin(engine.time() * 3) * 10
 
-local e = engine.create_entity()
-local atlas = engine.atlas_load("assets/atlas.png", "assets/atlas.json")
-local tex = atlas and atlas:tex() or engine.load_texture("assets/atlas.png")
+-- Deterministic random numbers
+engine.seed(12345)
+local random_x = engine.random_range(0, 320)
+```
 
-local T = engine.create_transform_buffer(1)
-local S = engine.create_sprite_buffer(1)
-local fb = engine.frame_builder(T, S)
+## 🏗️ Advanced Usage
 
-function on_start()
-  engine.set_render_mode("hd")
-  fb:transform(1, e, 200, 120, 0.0, 64, 64)
-  if atlas then fb:sprite_named(1, e, atlas, "ball", 1,1,1,1) else fb:sprite_tex(1, e, tex, 0,0,1,1, 1,1,1,1) end
-end
+### High-Performance Batching
+For maximum performance, use typed buffers:
+
+```lua
+-- Pre-allocate buffers
+local transforms = engine.create_transform_buffer(1000)
+local sprites = engine.create_sprite_buffer(1000)
+local builder = engine.frame_builder(transforms, sprites)
 
 function on_update(dt)
-  fb:transform(1, e, 200 + math.sin(engine.time())*50, 120, 0.0, 64, 64)
-  fb:commit()
+  -- Batch update all entities
+  for i, entity in ipairs(entities) do
+    builder:transform(i, entity.id, entity.x, entity.y, 0, 32, 32)
+    builder:sprite_tex(i, entity.id, texture, 0,0,1,1, 1,1,1,1)
+  end
+  
+  builder:commit() -- Single GPU submission
 end
 ```
 
-## API Reference
+### Atlas-Based Rendering
+```lua
+engine.sprite{
+  entity = character,
+  atlas = {ref = character_atlas, name = "hero_idle_01"},
+  pos = {x, y},
+  size = {64, 64}
+}
+```
 
-### TransformBuffer
-- create: `engine.create_transform_buffer(cap)`
-- set: `T:set(i, entity|id, x, y, rot, w, h)`
-- info: `T:len()`, `T:cap()`, `T:resize(new_cap)`
+## 🔧 Development Workflow
 
-### SpriteBuffer
-- create: `engine.create_sprite_buffer(cap)`
-- set: `S:set(i, entity, tex, u0, v0, u1, v1, r, g, b, a)`
-- texture: `S:set_tex(i, entity, tex)`
-- UVs: `S:set_uv_rect(i, u0, v0, u1, v1)`
-- color: `S:set_color(i, r, g, b, a)`
-- depth: `S:set_z(i, z_value)` (controls draw order; higher values render on top)
-- atlas: `S:set_named_uv(i, atlas, name)`
-- info: `S:len()`, `S:cap()`, `S:resize(new_cap)`
+```bash
+# Development
+cargo run -p luarite                    # Run with hot reload
 
-### FrameBuilder
-- create: `engine.frame_builder(T, S)`
-- transform: `fb:transform(i, entity, x, y, rot, w, h)`
-- sprite (UV): `fb:sprite_uv(i, entity, u0, v0, u1, v1)`
-- sprite (texture): `fb:sprite_tex(i, entity, tex, u0, v0, u1, v1, r, g, b, a)`
-- sprite (atlas): `fb:sprite_named(i, entity, atlas, name, r, g, b, a)`
-- sprite_color: `fb:sprite_color(i, r, g, b, a)`
-- commit: `fb:commit()`
+# Recording & Replay (for debugging)
+cargo run -p luarite -- --record game.log
+cargo run -p luarite -- --replay game.log
 
-### Input
-- `engine.keys` is a table of keycodes. Use `K = engine.keys` for convenience.
-- `snapshot:down(K.KeyW) -> bool` (is key currently down?)
-- `snapshot:pressed(K.KeyW) -> bool` (was key pressed this frame?)
-- `snapshot:released(K.KeyW) -> bool` (was key released this frame?)
-- `snapshot:get_mouse_button(name) -> bool`
-- `snapshot:was_mouse_button_pressed(name) -> bool`
-- `snapshot:was_mouse_button_released(name) -> bool`
-- `snapshot:mouse_pos() -> (x, y)`
+# Testing & Quality
+cargo test                              # Run all tests
+cargo fmt --all && cargo clippy --all-targets -- -D warnings
+```
 
-### HUD & Logging
-- `engine.hud_printf("L:1 R:0 fps=60.0")` shows on‑screen; max ~12 lines kept, 30 msgs/sec rate limit.
-- `engine.log("warn", "message")` emits to tracing; console defaults to WARN level.
+## 📁 Project Structure
 
-### Performance Tips
-- Prefer typed buffers + frame builder. Reuse buffers; overwrite rows in place.
-- Aim for one `engine.set_transforms(...)` + one `engine.submit_sprites(...)` per frame.
-- Batch by texture (use atlases). Keep SpriteBuffer small and tight to active rows.
-- Transforms are f32 internally; rebuild them each frame; sprites can be updated only when attributes change.
+```
+luarite/
+├── crates/
+│   ├── engine_core/     # 🦀 Rust engine (rendering, input, windowing)
+│   └── engine_scripting/ # 🌙 Lua integration and API bindings
+├── host/                # 🖥️  Desktop application and hot-reload
+├── scripts/             # 📜 Your Lua game scripts
+└── assets/              # 🎨 Textures, atlases, and game assets
+```
 
-## Project Layout
-- `crates/engine_core/`: window, renderer, HUD, offscreen, input, time, metrics, state
-- `crates/engine_scripting/`: Lua sandbox + API bindings (typed buffers, builder, atlas)
-- `host/`: desktop runner (`luarite`) wiring (hot‑reload, record/replay, input)
-- `scripts/`: Lua scripts (entry at `scripts/game.lua`)
-- `assets/`: textures/atlases (falls back to white if missing)
+## 🎯 Design Philosophy
 
-## Testing
-- Workspace: `cargo test` (unit + integration + offscreen e2e)
-- Host e2e tests live in `host/tests` and catch regressions (no‑flicker, persistence, precedence)
-- Virtual canvas e2e tests verify pixel-perfect z-ordering through the complete Lua → Engine → Renderer pipeline
+**Simplicity First** — Easy things are easy, complex things are possible  
+**Performance Matters** — Zero-allocation hot paths and batched GPU operations  
+**Safety & Determinism** — Predictable execution for reliable games  
+**Developer Joy** — Tools and APIs that make game development delightful  
 
-## Notes
-- Focused on secure, deterministic scripting. Record/replay and richer metrics available; features are evolving.
+## 🤝 Contributing
+
+We welcome contributions! Whether it's:
+- 🐛 Bug fixes and performance improvements  
+- ✨ New features and API enhancements
+- 📚 Documentation and examples
+- 🧪 Tests and quality improvements
+
+Please see our [contribution guidelines](CONTRIBUTING.md) for details.
+
+## 📄 License
+
+Licensed under either of
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+---
+
+*Built with ❤️ and modern development practices. Luarite is an experiment in AI-assisted development, combining human creativity with advanced tooling.*

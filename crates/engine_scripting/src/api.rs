@@ -339,6 +339,54 @@ fn create_keys_table(lua: &Lua) -> mlua::Result<mlua::Table> {
     Ok(keys)
 }
 
+/// Parse hex color from integer (0xRRGGBBAA) to normalized RGBA floats
+fn parse_hex_color(hex: u32) -> (f32, f32, f32, f32) {
+    let r = ((hex >> 24) & 0xFF) as f32 / 255.0;
+    let g = ((hex >> 16) & 0xFF) as f32 / 255.0;
+    let b = ((hex >> 8) & 0xFF) as f32 / 255.0;
+    let a = (hex & 0xFF) as f32 / 255.0;
+    (r, g, b, a)
+}
+
+/// Parse hex color from string ("#RRGGBB", "#RRGGBBAA", "RRGGBB", "RRGGBBAA")
+fn parse_hex_string(hex_str: &str) -> Result<(f32, f32, f32, f32), String> {
+    let hex_str = hex_str.trim_start_matches('#');
+
+    let hex_val = match hex_str.len() {
+        6 => {
+            // RGB - assume full alpha
+            let rgb = u32::from_str_radix(hex_str, 16).map_err(|_| "Invalid hex color format")?;
+            (rgb << 8) | 0xFF // Shift RGB left and add FF for alpha
+        }
+        8 => {
+            // RGBA
+            u32::from_str_radix(hex_str, 16).map_err(|_| "Invalid hex color format")?
+        }
+        _ => return Err("Hex color must be 6 (RGB) or 8 (RGBA) characters".to_string()),
+    };
+
+    Ok(parse_hex_color(hex_val))
+}
+
+/// Convert HSV to RGB. H in [0,360], S,V in [0,1]
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
+    let h = h / 60.0;
+    let c = v * s;
+    let x = c * (1.0 - ((h % 2.0) - 1.0).abs());
+    let m = v - c;
+
+    let (r, g, b) = match h as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+
+    (r + m, g + m, b + m)
+}
+
 /// Main engine API struct
 pub struct EngineApi {
     next_entity_id: u32,
@@ -352,6 +400,10 @@ pub struct EngineApi {
     log_rl: Rc<RefCell<(f64, u32)>>,
     hud_rl: Rc<RefCell<(f64, u32)>>,
     capabilities: EngineCapabilities,
+
+    // Internal sugar API buffers (growable)
+    sugar_transforms: Rc<RefCell<TransformBuffer>>,
+    sugar_sprites: Rc<RefCell<SpriteBuffer>>,
 }
 
 impl EngineApi {
@@ -366,6 +418,8 @@ impl EngineApi {
             log_rl: Rc::new(RefCell::new((0.0, 0))),
             hud_rl: Rc::new(RefCell::new((0.0, 0))),
             capabilities: EngineCapabilities::default(),
+            sugar_transforms: Rc::new(RefCell::new(TransformBuffer::new(128))), // Start with reasonable capacity
+            sugar_sprites: Rc::new(RefCell::new(SpriteBuffer::new(128))),
         }
     }
 
@@ -511,6 +565,206 @@ impl EngineApi {
             .set("frame_builder", fb_ctor)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
+        // Sugar drawing API
+        let sugar_transforms = self.sugar_transforms.clone();
+        let sugar_sprites = self.sugar_sprites.clone();
+
+        let begin_frame_func = lua
+            .create_function(move |_, ()| {
+                // Clear internal sugar buffers for fresh frame
+                *sugar_transforms.borrow().len.borrow_mut() = 0;
+                *sugar_sprites.borrow().len.borrow_mut() = 0;
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("begin_frame", begin_frame_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let sugar_transforms_sprite = self.sugar_transforms.clone();
+        let sugar_sprites_sprite = self.sugar_sprites.clone();
+        let sprite_sugar_func = lua
+            .create_function(move |_lua, sprite_def: mlua::Table| {
+                // Extract required fields
+                let entity: AnyUserData = sprite_def.get("entity")?;
+                let entity_id = entity.borrow::<EntityId>()?.0;
+
+                // Extract position
+                let pos: mlua::Table = sprite_def.get("pos")?;
+                let x: f64 = pos.raw_get(1)?;
+                let y: f64 = pos.raw_get(2)?;
+
+                // Extract size (can be single number or {w, h})
+                let (w, h) = match sprite_def.get::<mlua::Value>("size")? {
+                    mlua::Value::Number(size) => (size, size),
+                    mlua::Value::Integer(size) => (size as f64, size as f64),
+                    mlua::Value::Table(size_table) => {
+                        let w: f64 = size_table.raw_get(1)?;
+                        let h: f64 = size_table.raw_get(2)?;
+                        (w, h)
+                    }
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(
+                            "size must be number or {w, h} table".into(),
+                        ))
+                    }
+                };
+
+                // Extract rotation (optional, default 0)
+                let rotation: f64 = sprite_def.get("rotation").unwrap_or(0.0);
+
+                // Extract z-index (optional, default 0)
+                let z: f32 = sprite_def.get("z").unwrap_or(0.0);
+
+                // Extract color (flexible formats)
+                let (r, g, b, a) = match sprite_def.get::<mlua::Value>("color")? {
+                    mlua::Value::Table(color_table) => {
+                        // Color table from helper functions {r=..., g=..., b=..., a=...}
+                        let r: f32 = color_table.get("r")?;
+                        let g: f32 = color_table.get("g")?;
+                        let b: f32 = color_table.get("b")?;
+                        let a: f32 = color_table.get("a")?;
+                        (r, g, b, a)
+                    }
+                    mlua::Value::Integer(hex) => {
+                        // Raw hex integer like 0xFFF27AFF
+                        parse_hex_color(hex as u32)
+                    }
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(
+                            "color must be color table or hex integer".into(),
+                        ))
+                    }
+                };
+
+                // Handle texture and UV coordinates
+                let (texture_id, u0, v0, u1, v1) =
+                    if let Ok(atlas_table) = sprite_def.get::<mlua::Table>("atlas") {
+                        // Atlas-based texture
+                        let atlas: AnyUserData = atlas_table.get("ref")?;
+                        let name: String = atlas_table.get("name")?;
+                        let atlas_ref = atlas.borrow::<Atlas>()?;
+                        let uv = atlas_ref.uv_map.get(&name).ok_or_else(|| {
+                            mlua::Error::RuntimeError(format!("unknown atlas name: {}", name))
+                        })?;
+                        (atlas_ref.texture.0, uv[0], uv[1], uv[2], uv[3])
+                    } else {
+                        // Direct texture with UV
+                        let texture: AnyUserData = sprite_def.get("texture")?;
+                        let texture_handle = texture.borrow::<TextureHandle>()?;
+                        let uv: mlua::Table = sprite_def.get("uv")?;
+                        let u0: f32 = uv.raw_get(1)?;
+                        let v0: f32 = uv.raw_get(2)?;
+                        let u1: f32 = uv.raw_get(3)?;
+                        let v1: f32 = uv.raw_get(4)?;
+                        (texture_handle.0, u0, v0, u1, v1)
+                    };
+
+                // Add to internal sugar buffers
+                let transforms = sugar_transforms_sprite.borrow_mut();
+                let sprites = sugar_sprites_sprite.borrow_mut();
+
+                // Grow buffers if needed
+                let current_len = (*transforms.len.borrow()).max(*sprites.len.borrow());
+                let new_index = current_len + 1;
+                let required_cap = new_index;
+
+                if required_cap > *transforms.cap.borrow() {
+                    let new_cap = required_cap * 2;
+                    let mut buf = transforms.buf.borrow_mut();
+                    buf.resize(new_cap * 6, 0.0);
+                    *transforms.cap.borrow_mut() = new_cap;
+                }
+                if required_cap > *sprites.cap.borrow() {
+                    let new_cap = required_cap * 2;
+                    let mut rows = sprites.rows.borrow_mut();
+                    rows.resize(
+                        new_cap,
+                        SpriteData {
+                            entity_id: 0,
+                            texture_id: 0,
+                            uv: [0.0; 4],
+                            color: [0.0; 4],
+                            z: 0.0,
+                        },
+                    );
+                    *sprites.cap.borrow_mut() = new_cap;
+                }
+
+                // Add transform directly to buffer
+                let off = (new_index - 1) * 6;
+                let mut buf = transforms.buf.borrow_mut();
+                buf[off] = entity_id as f32;
+                buf[off + 1] = x as f32;
+                buf[off + 2] = y as f32;
+                buf[off + 3] = rotation as f32;
+                buf[off + 4] = w as f32;
+                buf[off + 5] = h as f32;
+                *transforms.len.borrow_mut() = new_index;
+
+                // Add sprite directly to buffer
+                let mut rows = sprites.rows.borrow_mut();
+                rows[new_index - 1] = SpriteData {
+                    entity_id,
+                    texture_id,
+                    uv: [u0, v0, u1, v1],
+                    color: [r, g, b, a],
+                    z,
+                };
+                *sprites.len.borrow_mut() = new_index;
+
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("sprite", sprite_sugar_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let sugar_transforms_end = self.sugar_transforms.clone();
+        let sugar_sprites_end = self.sugar_sprites.clone();
+        let end_frame_func = lua
+            .create_function(move |lua, ()| {
+                // Commit sugar buffers using the existing API
+                let globals = lua.globals();
+                let engine_table: mlua::Table = globals.get("engine")?;
+                let set_transforms: mlua::Function = engine_table.get("set_transforms")?;
+                let submit_sprites: mlua::Function = engine_table.get("submit_sprites")?;
+
+                // Clone the buffer data for passing to API
+                let transforms_clone = {
+                    let transforms_ref = sugar_transforms_end.borrow();
+                    let len = *transforms_ref.len.borrow();
+                    let cap = *transforms_ref.cap.borrow();
+                    let buf_clone = transforms_ref.buf.borrow().clone();
+                    let clone_buf = TransformBuffer::new(cap);
+                    *clone_buf.buf.borrow_mut() = buf_clone;
+                    *clone_buf.len.borrow_mut() = len;
+                    clone_buf
+                };
+                let sprites_clone = {
+                    let sprites_ref = sugar_sprites_end.borrow();
+                    let len = *sprites_ref.len.borrow();
+                    let cap = *sprites_ref.cap.borrow();
+                    let rows_clone = sprites_ref.rows.borrow().clone();
+                    let clone_buf = SpriteBuffer::new(cap);
+                    *clone_buf.rows.borrow_mut() = rows_clone;
+                    *clone_buf.len.borrow_mut() = len;
+                    clone_buf
+                };
+
+                let transforms_ud = lua.create_userdata(transforms_clone)?;
+                let sprites_ud = lua.create_userdata(sprites_clone)?;
+
+                set_transforms.call::<()>(transforms_ud)?;
+                submit_sprites.call::<()>(sprites_ud)?;
+
+                Ok(())
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("end_frame", end_frame_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
         // Input system
         let input_snapshot = self.input.clone();
         let input_func = lua
@@ -607,6 +861,67 @@ impl EngineApi {
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         engine_table
             .set("random_range", rand_range_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        // Color helper functions
+        let rgba_func = lua
+            .create_function(|lua, (r, g, b, a): (u8, u8, u8, u8)| {
+                let color = lua.create_table()?;
+                color.set("r", r as f32 / 255.0)?;
+                color.set("g", g as f32 / 255.0)?;
+                color.set("b", b as f32 / 255.0)?;
+                color.set("a", a as f32 / 255.0)?;
+                Ok(color)
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("rgba", rgba_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let rgb_func = lua
+            .create_function(|lua, (r, g, b): (u8, u8, u8)| {
+                let color = lua.create_table()?;
+                color.set("r", r as f32 / 255.0)?;
+                color.set("g", g as f32 / 255.0)?;
+                color.set("b", b as f32 / 255.0)?;
+                color.set("a", 1.0)?;
+                Ok(color)
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("rgb", rgb_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let hex_func = lua
+            .create_function(|lua, hex_str: String| match parse_hex_string(&hex_str) {
+                Ok((r, g, b, a)) => {
+                    let color = lua.create_table()?;
+                    color.set("r", r)?;
+                    color.set("g", g)?;
+                    color.set("b", b)?;
+                    color.set("a", a)?;
+                    Ok(color)
+                }
+                Err(e) => Err(mlua::Error::RuntimeError(e)),
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("hex", hex_func)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+        let hsv_func = lua
+            .create_function(|lua, (h, s, v, a): (f32, f32, f32, Option<f32>)| {
+                let (r, g, b) = hsv_to_rgb(h, s, v);
+                let color = lua.create_table()?;
+                color.set("r", r)?;
+                color.set("g", g)?;
+                color.set("b", b)?;
+                color.set("a", a.unwrap_or(1.0))?;
+                Ok(color)
+            })
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        engine_table
+            .set("hsv", hsv_func)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Persistence system

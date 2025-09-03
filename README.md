@@ -52,7 +52,7 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
   - `engine.get_input() -> snapshot` (methods: `down(key)`, `pressed(key)`, `released(key)`, `mouse_pos()`)
   - `engine.keys` is a table of keycodes, e.g. `engine.keys.KeyW`, `engine.keys.ArrowUp`.
   - `engine.window_size() -> (w, h)`
-  - `engine.set_render_resolution(mode)` (`retro` or `hd`)
+  - `engine.set_render_mode(mode)` (`retro` or `hd`)
 - RNG (deterministic)
   - `engine.seed(n)` seeds the RNG. `math.random` is automatically shimmed to use this RNG.
   - `engine.random() -> n` returns a float `0 <= n < 1`.
@@ -65,7 +65,7 @@ The HUD shows FPS, CPU p99, sprites, and FFI calls. Terminal logs are quiet by d
   - `engine.log(level, msg)` (`info|warn|error|debug`, rate‑limited)
 
 ### Rendering
-- `engine.set_render_resolution(mode)`: Sets the virtual canvas resolution. Supports two modes:
+- `engine.set_render_mode(mode)`: Sets the virtual canvas resolution. Supports two modes:
   - `"retro"`: A 320x180 virtual canvas that is always integer-scaled to fit the window, preserving a pixel-perfect look.
   - `"hd"`: A 1920x1080 virtual canvas. It will use integer scaling if the window is close (within 5%) to a multiple of 1080p (e.g., 4K). Otherwise, it uses linear filtering for smooth scaling.
 - **Depth Sorting**: Sprites are automatically sorted by their z-value before rendering. Higher z-values appear on top of lower z-values, regardless of submission order. Use `S:set_z(index, z_value)` to control draw order.
@@ -78,7 +78,7 @@ local K = engine.keys
 local T, S, e, tex, fb
 
 function on_start()
-  engine.set_render_resolution("retro")
+  engine.set_render_mode("retro")
   e = engine.create_entity()
   tex = engine.load_texture("assets/atlas.png")
   T = engine.create_transform_buffer(1)
@@ -114,7 +114,7 @@ local S = engine.create_sprite_buffer(1)
 local fb = engine.frame_builder(T, S)
 
 function on_start()
-  engine.set_render_resolution("hd")
+  engine.set_render_mode("hd")
   fb:transform(1, e, 200, 120, 0.0, 64, 64)
   if atlas then fb:sprite_named(1, e, atlas, "ball", 1,1,1,1) else fb:sprite_tex(1, e, tex, 0,0,1,1, 1,1,1,1) end
 end

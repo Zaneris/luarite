@@ -16,7 +16,7 @@ local S = engine.create_sprite_buffer(3)
 
 function on_start()
   engine.set_clear_color(0.0, 0.0, 0.0, 1.0) -- Black background
-  engine.set_render_resolution("retro")
+  engine.set_render_mode("retro")
   
   -- Add in WRONG submission order: B first, A second, C last
   -- But z-values will determine render order: B(z=1.0) behind, C(z=2.0) middle, A(z=3.0) front

@@ -19,7 +19,7 @@ local S = engine.create_sprite_buffer(3)
 
 function on_start()
   engine.set_clear_color(0.0, 0.0, 0.0, 1.0) -- Black background
-  engine.set_render_resolution("retro")
+  engine.set_render_mode("retro")
   
   -- INTENTIONALLY ADD SPRITES IN WRONG ORDER
   -- Add front sprite first (index 1) but give it highest z-value

@@ -685,7 +685,7 @@ impl EngineApi {
             .create_function(|_, _: String| Ok(()))
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         engine_table
-            .set("set_render_resolution", set_render_fn)
+            .set("set_render_mode", set_render_fn)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Atlas load
@@ -1282,7 +1282,7 @@ impl EngineApi {
             .set("set_clear_color", set_clear_color_fn)
             .map_err(|e| anyhow::Error::msg(format!("Failed to set set_clear_color: {}", e)))?;
 
-        // Add set_render_resolution("retro"|"hd")
+        // Add set_render_mode("retro"|"hd")
         let srm = callbacks.set_render_mode_cb.clone();
         let set_render_fn = lua
             .create_function(move |_, mode: String| {
@@ -1299,14 +1299,10 @@ impl EngineApi {
                 }
                 Ok(())
             })
-            .map_err(|e| {
-                anyhow::Error::msg(format!("Failed to create set_render_resolution: {}", e))
-            })?;
+            .map_err(|e| anyhow::Error::msg(format!("Failed to create set_render_mode: {}", e)))?;
         engine_table
-            .set("set_render_resolution", set_render_fn)
-            .map_err(|e| {
-                anyhow::Error::msg(format!("Failed to set set_render_resolution: {}", e))
-            })?;
+            .set("set_render_mode", set_render_fn)
+            .map_err(|e| anyhow::Error::msg(format!("Failed to set set_render_mode: {}", e)))?;
 
         // Override load_texture to notify host and return a handle immediately
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);
@@ -1530,38 +1526,33 @@ impl UserData for FrameBuilder {
             let mut l = tb.len.borrow_mut(); if i > *l { *l = i; }
             Ok(())
         });
-        methods.add_method_mut(
-            "sprite_tex",
-            |lua,
-             this,
-             params: SpriteTexParams| {
-                let (i, id_ud, tex_ud, u0, v0, u1, v1, r, g, b, a, z_opt) = params;
-                let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
-                let sb = s_ud.borrow::<SpriteBuffer>()?;
-                let idx = i
-                    .checked_sub(1)
-                    .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
-                let cap = *sb.cap.borrow();
-                if idx >= cap {
-                    return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
-                }
-                let entity_id = id_ud.borrow::<EntityId>()?.0;
-                let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
-                let mut rows = sb.rows.borrow_mut();
-                rows[idx] = SpriteData {
-                    entity_id,
-                    texture_id,
-                    uv: [u0, v0, u1, v1],
-                    color: [r, g, b, a],
-                    z: z_opt.unwrap_or(0.0),
-                };
-                let mut l = sb.len.borrow_mut();
-                if i > *l {
-                    *l = i;
-                }
-                Ok(())
-            },
-        );
+        methods.add_method_mut("sprite_tex", |lua, this, params: SpriteTexParams| {
+            let (i, id_ud, tex_ud, u0, v0, u1, v1, r, g, b, a, z_opt) = params;
+            let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
+            let sb = s_ud.borrow::<SpriteBuffer>()?;
+            let idx = i
+                .checked_sub(1)
+                .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
+            let cap = *sb.cap.borrow();
+            if idx >= cap {
+                return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
+            }
+            let entity_id = id_ud.borrow::<EntityId>()?.0;
+            let texture_id = tex_ud.borrow::<TextureHandle>()?.0;
+            let mut rows = sb.rows.borrow_mut();
+            rows[idx] = SpriteData {
+                entity_id,
+                texture_id,
+                uv: [u0, v0, u1, v1],
+                color: [r, g, b, a],
+                z: z_opt.unwrap_or(0.0),
+            };
+            let mut l = sb.len.borrow_mut();
+            if i > *l {
+                *l = i;
+            }
+            Ok(())
+        });
         methods.add_method_mut(
             "sprite_uv",
             |lua, this, (i, id_ud, u0, v0, u1, v1): (usize, AnyUserData, f32, f32, f32, f32)| {

@@ -52,7 +52,7 @@ end
 function on_start()
   -- Explicitly set background to black and use retro virtual resolution (320x180)
   engine.set_clear_color(0.0, 0.0, 0.0)
-  engine.set_render_resolution("retro")
+  engine.set_render_mode("retro")
   background = engine.create_entity()
   paddle_l = engine.create_entity()
   paddle_r = engine.create_entity()

@@ -5,10 +5,10 @@ use engine_core::state::SpriteData;
 use engine_core::window::EngineWindow;
 use engine_scripting::api::{EngineApi, InputSnapshot, SpriteV2};
 use engine_scripting::sandbox::LuaSandbox;
+use std::cell::RefCell;
 use std::io::BufRead;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::cell::RefCell;
 use tracing::{info, Level};
 use winit::keyboard::KeyCode;
 
@@ -19,7 +19,8 @@ type TypedSprites = (
     usize,
     usize,
 );
-type SubmitSpritesTypedCallback = Rc<dyn Fn(std::rc::Rc<std::cell::RefCell<Vec<SpriteData>>>, usize, usize)>;
+type SubmitSpritesTypedCallback =
+    Rc<dyn Fn(std::rc::Rc<std::cell::RefCell<Vec<SpriteData>>>, usize, usize)>;
 
 fn main() -> Result<()> {
     // Parse simple CLI flags for record/replay
@@ -117,23 +118,22 @@ fn main() -> Result<()> {
         });
         let ex2 = exchange.clone();
         let submit_sprites_cb = Rc::new(move |sprites: &[SpriteV2]| {
-            {
-                let mut ex = ex2.borrow_mut();
-                ex.sprites.clear();
-                ex.sprites.extend_from_slice(sprites);
-            }
+            let mut ex = ex2.borrow_mut();
+            ex.sprites.clear();
+            ex.sprites.extend_from_slice(sprites);
         });
         // Typed sprites path: pass engine-owned vec Rc and rows
         let ex_sb = exchange.clone();
-        let submit_sprites_typed_cb: SubmitSpritesTypedCallback = Rc::new(move |rcvec, rows, cap| {
-            {
-                let mut ex = ex_sb.borrow_mut();
-                // Capture only the first submission per frame to avoid overwriting
-                if !ex.drained_sprites_this_frame && ex.typed_sprites.is_none() {
-                    ex.typed_sprites = Some((rcvec.clone(), rows, cap));
+        let submit_sprites_typed_cb: SubmitSpritesTypedCallback =
+            Rc::new(move |rcvec, rows, cap| {
+                {
+                    let mut ex = ex_sb.borrow_mut();
+                    // Capture only the first submission per frame to avoid overwriting
+                    if !ex.drained_sprites_this_frame && ex.typed_sprites.is_none() {
+                        ex.typed_sprites = Some((rcvec.clone(), rows, cap));
+                    }
                 }
-            }
-        });
+            });
         // Typed buffer f32 path: pass engine-owned buffer Rc and row/cap counts
         let ex_tf32 = exchange.clone();
         let set_transforms_f32_cb = Rc::new(
@@ -435,7 +435,9 @@ fn main() -> Result<()> {
         // Exchange for resetting per-frame drain flags
         let exchange_reset = exchange.clone();
         // Optional record/replay handles
-        let mut rec_file = record_path.clone().map(|p| std::fs::File::create(p).expect("create record file"));
+        let mut rec_file = record_path
+            .clone()
+            .map(|p| std::fs::File::create(p).expect("create record file"));
         let mut rep_lines: Option<std::io::Lines<std::io::BufReader<std::fs::File>>> =
             replay_path.clone().map(|p| {
                 let f = std::fs::File::open(p).expect("open replay file");

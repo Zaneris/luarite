@@ -17,7 +17,7 @@ local S = engine.create_sprite_buffer(3)
 
 function on_start()
   engine.set_clear_color(0.0, 0.0, 0.0)
-  engine.set_render_resolution("retro")
+  engine.set_render_mode("retro")
   
   -- Set up sprites with different z-values
   -- Back sprite (red, z=0.0) - should appear behind

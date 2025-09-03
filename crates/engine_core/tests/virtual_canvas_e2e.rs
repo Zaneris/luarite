@@ -4,8 +4,8 @@ use engine_core::{
     state::{EngineState, SpriteData, VirtualResolution},
 };
 // Removed unused imports
-use std::rc::Rc;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 // Type alias for complex type to satisfy clippy
 type ClearColor = (f32, f32, f32, f32);
@@ -45,7 +45,6 @@ impl<'a> FramebufferReader<'a> {
             [0, 0, 0, 0] // Return black for out-of-bounds access
         }
     }
-
 }
 
 /// Helper function to create a simple test texture (solid color) as PNG bytes
@@ -95,8 +94,11 @@ impl E2ETestHarness {
 
     /// Execute a Lua script end-to-end and return framebuffer data for verification
     async fn execute_script(&self, script_content: &str, script_name: &str) -> Result<Vec<u8>> {
-        use engine_scripting::{sandbox::LuaSandbox, api::{EngineApi, InputSnapshot}};
-        
+        use engine_scripting::{
+            api::{EngineApi, InputSnapshot},
+            sandbox::LuaSandbox,
+        };
+
         // Create sandbox and API
         let sandbox = LuaSandbox::new()?;
         let api = EngineApi::new();
@@ -162,19 +164,23 @@ impl E2ETestHarness {
     /// Create renderer, state, and render captured data to virtual canvas
     async fn render_captured_data(&self) -> Result<Vec<u8>> {
         // Determine virtual resolution from captured render mode
-        let render_mode = self.render_mode_capture.borrow().clone().unwrap_or_else(|| "retro".to_string());
+        let render_mode = self
+            .render_mode_capture
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| "retro".to_string());
         let (virtual_res, window_size) = match render_mode.as_str() {
             "hd" => (VirtualResolution::Hd1920x1080, (1920, 1080)),
             _ => (VirtualResolution::Retro320x180, (640, 480)), // default to retro
         };
-        
+
         // Create headless renderer
         let mut renderer = SpriteRenderer::new_headless(window_size.0, window_size.1).await?;
 
-        // Create engine state  
+        // Create engine state
         let mut engine_state = EngineState::new();
         engine_state.set_virtual_resolution(virtual_res);
-        
+
         // Apply captured clear color if any
         if let Some((r, g, b, a)) = *self.clear_color_capture.borrow() {
             engine_state.set_clear_color(r, g, b, a);
@@ -189,15 +195,16 @@ impl E2ETestHarness {
         // Convert and submit sprites from captured data
         let sprites = self.sprites_capture.borrow();
         if !sprites.is_empty() {
-            let sprite_data: Vec<SpriteData> = sprites.iter().map(|s| {
-                SpriteData {
+            let sprite_data: Vec<SpriteData> = sprites
+                .iter()
+                .map(|s| SpriteData {
                     entity_id: s.entity_id,
                     texture_id: s.texture_id,
                     uv: [s.u0, s.v0, s.u1, s.v1],
                     color: [s.r, s.g, s.b, s.a],
                     z: s.z,
-                }
-            }).collect();
+                })
+                .collect();
             engine_state.submit_sprites(sprite_data)?;
         }
 
@@ -209,13 +216,12 @@ impl E2ETestHarness {
         let framebuffer_data = renderer.render_to_virtual_canvas(&engine_state)?;
         Ok(framebuffer_data)
     }
-
 }
 
 #[tokio::test]
 async fn test_retro_mode_320x180_rendering() -> Result<()> {
     let harness = E2ETestHarness::new();
-    
+
     let script = r#"
 assert(engine.api_version == 1)
 
@@ -226,7 +232,7 @@ local S = engine.create_sprite_buffer(1)
 
 function on_start()
     engine.set_clear_color(0.2, 0.3, 0.8, 1.0) -- Blue background
-    engine.set_render_resolution("retro")
+    engine.set_render_mode("retro")
     
     -- Set up sprite data
     S:set_tex(1, entity, tex)
@@ -280,7 +286,7 @@ end
 #[tokio::test]
 async fn test_hd_mode_1920x1080_rendering() -> Result<()> {
     let harness = E2ETestHarness::new();
-    
+
     let script = r#"
 assert(engine.api_version == 1)
 
@@ -291,7 +297,7 @@ local S = engine.create_sprite_buffer(1)
 
 function on_start()
     engine.set_clear_color(0.1, 0.5, 0.1, 1.0) -- Green background
-    engine.set_render_resolution("hd")
+    engine.set_render_mode("hd")
     
     -- Set up sprite data with blue color
     S:set_tex(1, entity, tex)
@@ -623,7 +629,7 @@ async fn test_sprite_alpha_blending() -> Result<()> {
 #[tokio::test]
 async fn test_z_ordering_wrong_submission_order() -> Result<()> {
     let harness = E2ETestHarness::new();
-    
+
     let script = r#"
 -- Z-ordering test: Add sprites in WRONG order but with CORRECT z-values
 
@@ -640,7 +646,7 @@ local S = engine.create_sprite_buffer(3)
 
 function on_start()
   engine.set_clear_color(0.0, 0.0, 0.0, 1.0)
-  engine.set_render_resolution("retro")
+  engine.set_render_mode("retro")
   
   -- Add sprites in WRONG ORDER but correct z-values
   S:set_tex(1, front_entity, tex)
@@ -674,12 +680,12 @@ end"#;
 
     let framebuffer_data = harness.execute_script(script, "z_order_test").await?;
     let fb = FramebufferReader::new(&framebuffer_data, 320, 180);
-    
+
     // Verify z-ordering: At center pixel (160, 90) we should see BLUE (front sprite)
     // despite it being added first in the wrong order
     let center_pixel = fb.get_pixel(160, 90);
     let expected_blue = [0, 0, 255, 255]; // Pure blue - the front sprite should be visible
-    
+
     assert!(
         pixel_matches(center_pixel, expected_blue, 5),
         "Z-ordering failed! Expected blue (front sprite) at center, got {:?}. \
@@ -687,7 +693,7 @@ end"#;
          but z-values should make BLUE appear on top (z=2.0 > z=1.0 > z=0.0)",
         center_pixel
     );
-    
+
     // Also verify the background is black where no sprites are
     let bg_pixel = fb.get_pixel(50, 50); // Far from center, should be background
     let expected_bg = [0, 0, 0, 255]; // Black background
@@ -696,15 +702,15 @@ end"#;
         "Background should be black, got {:?}",
         bg_pixel
     );
-    
+
     Ok(())
 }
 
 /// E2E test for z-ordering with partial overlaps and different textures
-#[tokio::test] 
+#[tokio::test]
 async fn test_z_ordering_partial_overlaps() -> Result<()> {
     let harness = E2ETestHarness::new();
-    
+
     let script = r#"
 assert(engine.api_version == 1)
 
@@ -719,7 +725,7 @@ local S = engine.create_sprite_buffer(3)
 
 function on_start()
   engine.set_clear_color(0.0, 0.0, 0.0, 1.0)
-  engine.set_render_resolution("retro")
+  engine.set_render_mode("retro")
   
   -- Submit in wrong order: HIGH first, LOW second, MID last
   -- But z-values will determine render order: LOW (z=1.0), MID (z=3.0), HIGH (z=5.0)
@@ -757,51 +763,53 @@ function on_update(dt)
   engine.submit_sprites(S)
 end"#;
 
-    let framebuffer_data = harness.execute_script(script, "partial_overlap_test").await?;
+    let framebuffer_data = harness
+        .execute_script(script, "partial_overlap_test")
+        .await?;
     let fb = FramebufferReader::new(&framebuffer_data, 320, 180);
-    
+
     // Test specific overlap regions with new positioning:
     // Red at (140,90) spans 110-170, Green at (160,90) spans 130-190, Blue at (180,90) spans 150-210
     // - Left area (120, 90): Only red sprite, should show red
-    // - Center-left overlap (140, 90): Red + Green overlap, GREEN should win (z=3.0 > z=1.0) 
+    // - Center-left overlap (140, 90): Red + Green overlap, GREEN should win (z=3.0 > z=1.0)
     // - Center overlap (160, 90): All three overlap, BLUE should win (z=5.0 highest)
     // - Center-right overlap (180, 90): Green + Blue overlap, BLUE should win (z=5.0 > z=3.0)
     // - Right area (200, 90): Only blue sprite, should show blue
-    
+
     let red_only = fb.get_pixel(120, 90);
     assert!(
         pixel_matches(red_only, [255, 0, 0, 255], 5),
         "Red-only area should show red, got {:?}",
         red_only
     );
-    
+
     let red_green_overlap = fb.get_pixel(140, 90);
     assert!(
         pixel_matches(red_green_overlap, [0, 255, 0, 255], 5),
         "Red+Green overlap should show GREEN (z=3.0 > z=1.0), got {:?}",
         red_green_overlap
     );
-    
+
     let all_three_overlap = fb.get_pixel(160, 90);
     assert!(
         pixel_matches(all_three_overlap, [0, 0, 255, 255], 5),
         "All three overlap should show BLUE (z=5.0 highest), got {:?}",
         all_three_overlap
     );
-    
+
     let green_blue_overlap = fb.get_pixel(180, 90);
     assert!(
         pixel_matches(green_blue_overlap, [0, 0, 255, 255], 5),
         "Green+Blue overlap should show BLUE (z=5.0 > z=3.0), got {:?}",
         green_blue_overlap
     );
-    
+
     let blue_only = fb.get_pixel(200, 90);
     assert!(
         pixel_matches(blue_only, [0, 0, 255, 255], 5),
         "Blue-only area should show blue, got {:?}",
         blue_only
     );
-    
+
     Ok(())
 }

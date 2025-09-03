@@ -1,4 +1,3 @@
-#![allow(clippy::module_inception)]
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]

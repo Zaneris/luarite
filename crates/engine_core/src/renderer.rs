@@ -156,13 +156,10 @@ pub struct SpriteRenderer {
     uniform_bind_group: wgpu::BindGroup,
     // Separate uniform buffer for presentation pass to avoid conflicts
     present_uniform_buffer: wgpu::Buffer,
-    #[allow(dead_code)]
     present_uniform_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
 
     // Sprite batch data
-    #[allow(dead_code)]
-    max_sprites: u32,
     sprite_vertices: Vec<SpriteVertex>,
     sprite_indices: Vec<u16>,
 
@@ -487,7 +484,6 @@ impl SpriteRenderer {
             present_uniform_buffer,
             present_uniform_bind_group,
             texture_bind_group_layout,
-            max_sprites,
             sprite_vertices: Vec::with_capacity(max_sprites as usize * 4),
             sprite_indices: Vec::with_capacity(max_sprites as usize * 6),
             textures,

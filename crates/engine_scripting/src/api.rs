@@ -171,7 +171,7 @@ impl UserData for InputSnapshot {
 }
 
 /// Engine capabilities for API handshake
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct EngineCapabilities {
     pub max_entities: u32,
     pub max_textures: u32,
@@ -326,7 +326,6 @@ pub struct EngineApi {
     // Simple rate limiters (window start, count)
     log_rl: Rc<RefCell<(f64, u32)>>,
     hud_rl: Rc<RefCell<(f64, u32)>>,
-    #[allow(dead_code)] // TODO: will be used for capability queries
     capabilities: EngineCapabilities,
 }
 
@@ -341,7 +340,7 @@ impl EngineApi {
             input: Rc::new(RefCell::new(InputSnapshot::new())),
             log_rl: Rc::new(RefCell::new((0.0, 0))),
             hud_rl: Rc::new(RefCell::new((0.0, 0))),
-            capabilities: EngineCapabilities::default(), // TODO: will be used for capability queries
+            capabilities: EngineCapabilities::default(),
         }
     }
 
@@ -386,9 +385,11 @@ impl EngineApi {
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Set up get_capabilities function
-        let caps_func = lua
-            .create_function(move |_, ()| Ok(EngineCapabilities::default()))
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let caps_func = {
+            let caps = self.capabilities;
+            lua.create_function(move |_, ()| Ok(caps))
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?
+        };
         engine_table
             .set("get_capabilities", caps_func)
             .map_err(|e| anyhow::anyhow!(e.to_string()))?;

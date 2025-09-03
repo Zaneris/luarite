@@ -177,8 +177,8 @@ pub struct EngineCapabilities {
     pub max_textures: u32,
     pub supports_hot_reload: bool,
     pub supports_persistence: bool,
-    pub v2_arrays: bool,
-    pub v3_packed_blobs: bool,
+    pub supports_table_api: bool,
+    pub supports_binary_buffers: bool,
 }
 
 impl Default for EngineCapabilities {
@@ -188,8 +188,8 @@ impl Default for EngineCapabilities {
             max_textures: 1000,
             supports_hot_reload: true,
             supports_persistence: true,
-            v2_arrays: true,
-            v3_packed_blobs: false, // Will implement later
+            supports_table_api: true,
+            supports_binary_buffers: false, // Will implement later
         }
     }
 }
@@ -204,8 +204,12 @@ impl UserData for EngineCapabilities {
         methods.add_method("supports_persistence", |_, this, ()| {
             Ok(this.supports_persistence)
         });
-        methods.add_method("v2_arrays", |_, this, ()| Ok(this.v2_arrays));
-        methods.add_method("v3_packed_blobs", |_, this, ()| Ok(this.v3_packed_blobs));
+        methods.add_method("supports_table_api", |_, this, ()| {
+            Ok(this.supports_table_api)
+        });
+        methods.add_method("supports_binary_buffers", |_, this, ()| {
+            Ok(this.supports_binary_buffers)
+        });
     }
 }
 
@@ -976,7 +980,7 @@ impl UserData for TransformBuffer {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method_mut(
             "set",
-            |lua, this, (i, id, x, y, rot, w, h): (usize, Value, f64, f64, f64, f64, f64)| {
+            |_, this, (i, id, x, y, rot, w, h): (usize, AnyUserData, f64, f64, f64, f64, f64)| {
                 let idx = i
                     .checked_sub(1)
                     .ok_or_else(|| mlua::Error::RuntimeError("index must be >= 1".into()))?;
@@ -984,18 +988,7 @@ impl UserData for TransformBuffer {
                 if idx >= cap {
                     return Err(mlua::Error::RuntimeError("index exceeds capacity".into()));
                 }
-                let entity_id = match id {
-                    Value::UserData(ud) => {
-                        if let Ok(ent) = ud.borrow::<EntityId>() {
-                            ent.0 as f32
-                        } else {
-                            return Err(mlua::Error::RuntimeError(
-                                "id must be EntityId or number".into(),
-                            ));
-                        }
-                    }
-                    v => f64::from_lua(v, lua)? as f32,
-                };
+                let entity_id = id.borrow::<EntityId>()?.0 as f32;
                 let off = idx * 6;
                 let mut b = this.buf.borrow_mut();
                 b[off] = entity_id;
@@ -1398,7 +1391,7 @@ impl EngineApi {
 
 // DRY helpers for parsing v2 tables
 fn parse_transforms_table_to_out(
-    lua: &Lua,
+    _lua: &Lua,
     arr: mlua::Table,
     out: &mut Vec<f64>,
 ) -> mlua::Result<()> {
@@ -1412,7 +1405,7 @@ fn parse_transforms_table_to_out(
     out.reserve(len);
     let mut i = 1;
     while i <= len {
-        // id can be EntityId userdata or a number
+        // id must be EntityId userdata
         let v: mlua::Value = arr.raw_get(i)?;
         i += 1;
         let id_num = match v {
@@ -1421,11 +1414,15 @@ fn parse_transforms_table_to_out(
                     ent.0 as f64
                 } else {
                     return Err(mlua::Error::RuntimeError(
-                        "ARG_ERROR: id must be EntityId or number".into(),
+                        "ARG_ERROR: id must be EntityId".into(),
                     ));
                 }
             }
-            _ => f64::from_lua(v, lua)?,
+            _ => {
+                return Err(mlua::Error::RuntimeError(
+                    "ARG_ERROR: id must be EntityId".into(),
+                ))
+            }
         };
         out.push(id_num);
         // x,y,rot,sx,sy numbers

@@ -10,7 +10,6 @@ use std::io::BufRead;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tracing::{info, Level};
-use winit::keyboard::KeyCode;
 
 // Type aliases for complex types to satisfy clippy
 type TypedBuffer = (std::rc::Rc<std::cell::RefCell<Vec<f32>>>, usize, usize);
@@ -308,7 +307,7 @@ fn main() -> Result<()> {
 
             // Manual reload on 'R'
             if let Ok(inp) = window_input_for_reload.lock() {
-                let is_down = inp.keys.contains(&(KeyCode::KeyR as u32));
+                let is_down = inp.keys.contains(&engine_core::stable_keys::KEY_R);
                 if is_down && !reload_key_down {
                     if let Ok(src) = std::fs::read_to_string(SCRIPT_PATH) {
                         if let Err(e) = sandbox_for_reload.reload_script(&src, "game.lua") {

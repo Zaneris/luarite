@@ -176,7 +176,9 @@ impl ApplicationHandler for EngineWindow {
                 if let PhysicalKey::Code(keycode) = event.physical_key {
                     let down = matches!(event.state, ElementState::Pressed);
                     if let Ok(mut input) = self.input.lock() {
-                        input.set_key(keycode as u32, down);
+                        if let Some(stable_key) = crate::stable_keys::winit_to_stable(keycode) {
+                            input.set_key(stable_key, down);
+                        }
                     }
                 }
             }

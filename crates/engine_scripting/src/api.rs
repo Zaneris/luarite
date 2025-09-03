@@ -1,11 +1,11 @@
 use anyhow::Result;
+use engine_core::stable_keys;
 use engine_core::state::SpriteData;
 use mlua::{AnyUserData, FromLua, Lua, RegistryKey, UserData, UserDataMethods, Value};
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use winit::keyboard::KeyCode;
 
 // Type aliases to simplify complex function pointer types for clippy
 type SetTransformsCb = Rc<dyn Fn(&[f64])>;
@@ -211,106 +211,127 @@ impl UserData for EngineCapabilities {
 
 fn create_keys_table(lua: &Lua) -> mlua::Result<mlua::Table> {
     let keys = lua.create_table()?;
-    keys.set("Backquote", KeyCode::Backquote as u32)?;
-    keys.set("Backslash", KeyCode::Backslash as u32)?;
-    keys.set("BracketLeft", KeyCode::BracketLeft as u32)?;
-    keys.set("BracketRight", KeyCode::BracketRight as u32)?;
-    keys.set("Comma", KeyCode::Comma as u32)?;
-    keys.set("Digit0", KeyCode::Digit0 as u32)?;
-    keys.set("Digit1", KeyCode::Digit1 as u32)?;
-    keys.set("Digit2", KeyCode::Digit2 as u32)?;
-    keys.set("Digit3", KeyCode::Digit3 as u32)?;
-    keys.set("Digit4", KeyCode::Digit4 as u32)?;
-    keys.set("Digit5", KeyCode::Digit5 as u32)?;
-    keys.set("Digit6", KeyCode::Digit6 as u32)?;
-    keys.set("Digit7", KeyCode::Digit7 as u32)?;
-    keys.set("Digit8", KeyCode::Digit8 as u32)?;
-    keys.set("Digit9", KeyCode::Digit9 as u32)?;
-    keys.set("Equal", KeyCode::Equal as u32)?;
-    keys.set("IntlBackslash", KeyCode::IntlBackslash as u32)?;
-    keys.set("IntlRo", KeyCode::IntlRo as u32)?;
-    keys.set("IntlYen", KeyCode::IntlYen as u32)?;
-    keys.set("KeyA", KeyCode::KeyA as u32)?;
-    keys.set("KeyB", KeyCode::KeyB as u32)?;
-    keys.set("KeyC", KeyCode::KeyC as u32)?;
-    keys.set("KeyD", KeyCode::KeyD as u32)?;
-    keys.set("KeyE", KeyCode::KeyE as u32)?;
-    keys.set("KeyF", KeyCode::KeyF as u32)?;
-    keys.set("KeyG", KeyCode::KeyG as u32)?;
-    keys.set("KeyH", KeyCode::KeyH as u32)?;
-    keys.set("KeyI", KeyCode::KeyI as u32)?;
-    keys.set("KeyJ", KeyCode::KeyJ as u32)?;
-    keys.set("KeyK", KeyCode::KeyK as u32)?;
-    keys.set("KeyL", KeyCode::KeyL as u32)?;
-    keys.set("KeyM", KeyCode::KeyM as u32)?;
-    keys.set("KeyN", KeyCode::KeyN as u32)?;
-    keys.set("KeyO", KeyCode::KeyO as u32)?;
-    keys.set("KeyP", KeyCode::KeyP as u32)?;
-    keys.set("KeyQ", KeyCode::KeyQ as u32)?;
-    keys.set("KeyR", KeyCode::KeyR as u32)?;
-    keys.set("KeyS", KeyCode::KeyS as u32)?;
-    keys.set("KeyT", KeyCode::KeyT as u32)?;
-    keys.set("KeyU", KeyCode::KeyU as u32)?;
-    keys.set("KeyV", KeyCode::KeyV as u32)?;
-    keys.set("KeyW", KeyCode::KeyW as u32)?;
-    keys.set("KeyX", KeyCode::KeyX as u32)?;
-    keys.set("KeyY", KeyCode::KeyY as u32)?;
-    keys.set("KeyZ", KeyCode::KeyZ as u32)?;
-    keys.set("Minus", KeyCode::Minus as u32)?;
-    keys.set("Period", KeyCode::Period as u32)?;
-    keys.set("Quote", KeyCode::Quote as u32)?;
-    keys.set("Semicolon", KeyCode::Semicolon as u32)?;
-    keys.set("Slash", KeyCode::Slash as u32)?;
-    keys.set("AltLeft", KeyCode::AltLeft as u32)?;
-    keys.set("AltRight", KeyCode::AltRight as u32)?;
-    keys.set("Backspace", KeyCode::Backspace as u32)?;
-    keys.set("CapsLock", KeyCode::CapsLock as u32)?;
-    keys.set("ContextMenu", KeyCode::ContextMenu as u32)?;
-    keys.set("ControlLeft", KeyCode::ControlLeft as u32)?;
-    keys.set("ControlRight", KeyCode::ControlRight as u32)?;
-    keys.set("Enter", KeyCode::Enter as u32)?;
-    keys.set("SuperLeft", KeyCode::SuperLeft as u32)?;
-    keys.set("SuperRight", KeyCode::SuperRight as u32)?;
-    keys.set("ShiftLeft", KeyCode::ShiftLeft as u32)?;
-    keys.set("ShiftRight", KeyCode::ShiftRight as u32)?;
-    keys.set("Space", KeyCode::Space as u32)?;
-    keys.set("Tab", KeyCode::Tab as u32)?;
-    keys.set("ArrowDown", KeyCode::ArrowDown as u32)?;
-    keys.set("ArrowLeft", KeyCode::ArrowLeft as u32)?;
-    keys.set("ArrowRight", KeyCode::ArrowRight as u32)?;
-    keys.set("ArrowUp", KeyCode::ArrowUp as u32)?;
-    keys.set("End", KeyCode::End as u32)?;
-    keys.set("Home", KeyCode::Home as u32)?;
-    keys.set("PageDown", KeyCode::PageDown as u32)?;
-    keys.set("PageUp", KeyCode::PageUp as u32)?;
-    keys.set("F1", KeyCode::F1 as u32)?;
-    keys.set("F2", KeyCode::F2 as u32)?;
-    keys.set("F3", KeyCode::F3 as u32)?;
-    keys.set("F4", KeyCode::F4 as u32)?;
-    keys.set("F5", KeyCode::F5 as u32)?;
-    keys.set("F6", KeyCode::F6 as u32)?;
-    keys.set("F7", KeyCode::F7 as u32)?;
-    keys.set("F8", KeyCode::F8 as u32)?;
-    keys.set("F9", KeyCode::F9 as u32)?;
-    keys.set("F10", KeyCode::F10 as u32)?;
-    keys.set("F11", KeyCode::F11 as u32)?;
-    keys.set("F12", KeyCode::F12 as u32)?;
-    keys.set("Numpad0", KeyCode::Numpad0 as u32)?;
-    keys.set("Numpad1", KeyCode::Numpad1 as u32)?;
-    keys.set("Numpad2", KeyCode::Numpad2 as u32)?;
-    keys.set("Numpad3", KeyCode::Numpad3 as u32)?;
-    keys.set("Numpad4", KeyCode::Numpad4 as u32)?;
-    keys.set("Numpad5", KeyCode::Numpad5 as u32)?;
-    keys.set("Numpad6", KeyCode::Numpad6 as u32)?;
-    keys.set("Numpad7", KeyCode::Numpad7 as u32)?;
-    keys.set("Numpad8", KeyCode::Numpad8 as u32)?;
-    keys.set("Numpad9", KeyCode::Numpad9 as u32)?;
-    keys.set("NumpadAdd", KeyCode::NumpadAdd as u32)?;
-    keys.set("NumpadDecimal", KeyCode::NumpadDecimal as u32)?;
-    keys.set("NumpadDivide", KeyCode::NumpadDivide as u32)?;
-    keys.set("NumpadMultiply", KeyCode::NumpadMultiply as u32)?;
-    keys.set("NumpadSubtract", KeyCode::NumpadSubtract as u32)?;
-    keys.set("NumpadEnter", KeyCode::NumpadEnter as u32)?;
+
+    // Letters
+    keys.set("KeyA", stable_keys::KEY_A)?;
+    keys.set("KeyB", stable_keys::KEY_B)?;
+    keys.set("KeyC", stable_keys::KEY_C)?;
+    keys.set("KeyD", stable_keys::KEY_D)?;
+    keys.set("KeyE", stable_keys::KEY_E)?;
+    keys.set("KeyF", stable_keys::KEY_F)?;
+    keys.set("KeyG", stable_keys::KEY_G)?;
+    keys.set("KeyH", stable_keys::KEY_H)?;
+    keys.set("KeyI", stable_keys::KEY_I)?;
+    keys.set("KeyJ", stable_keys::KEY_J)?;
+    keys.set("KeyK", stable_keys::KEY_K)?;
+    keys.set("KeyL", stable_keys::KEY_L)?;
+    keys.set("KeyM", stable_keys::KEY_M)?;
+    keys.set("KeyN", stable_keys::KEY_N)?;
+    keys.set("KeyO", stable_keys::KEY_O)?;
+    keys.set("KeyP", stable_keys::KEY_P)?;
+    keys.set("KeyQ", stable_keys::KEY_Q)?;
+    keys.set("KeyR", stable_keys::KEY_R)?;
+    keys.set("KeyS", stable_keys::KEY_S)?;
+    keys.set("KeyT", stable_keys::KEY_T)?;
+    keys.set("KeyU", stable_keys::KEY_U)?;
+    keys.set("KeyV", stable_keys::KEY_V)?;
+    keys.set("KeyW", stable_keys::KEY_W)?;
+    keys.set("KeyX", stable_keys::KEY_X)?;
+    keys.set("KeyY", stable_keys::KEY_Y)?;
+    keys.set("KeyZ", stable_keys::KEY_Z)?;
+
+    // Digits
+    keys.set("Digit0", stable_keys::DIGIT_0)?;
+    keys.set("Digit1", stable_keys::DIGIT_1)?;
+    keys.set("Digit2", stable_keys::DIGIT_2)?;
+    keys.set("Digit3", stable_keys::DIGIT_3)?;
+    keys.set("Digit4", stable_keys::DIGIT_4)?;
+    keys.set("Digit5", stable_keys::DIGIT_5)?;
+    keys.set("Digit6", stable_keys::DIGIT_6)?;
+    keys.set("Digit7", stable_keys::DIGIT_7)?;
+    keys.set("Digit8", stable_keys::DIGIT_8)?;
+    keys.set("Digit9", stable_keys::DIGIT_9)?;
+
+    // Symbols
+    keys.set("Backquote", stable_keys::BACKQUOTE)?;
+    keys.set("Backslash", stable_keys::BACKSLASH)?;
+    keys.set("BracketLeft", stable_keys::BRACKET_LEFT)?;
+    keys.set("BracketRight", stable_keys::BRACKET_RIGHT)?;
+    keys.set("Comma", stable_keys::COMMA)?;
+    keys.set("Equal", stable_keys::EQUAL)?;
+    keys.set("Minus", stable_keys::MINUS)?;
+    keys.set("Period", stable_keys::PERIOD)?;
+    keys.set("Quote", stable_keys::QUOTE)?;
+    keys.set("Semicolon", stable_keys::SEMICOLON)?;
+    keys.set("Slash", stable_keys::SLASH)?;
+
+    // Modifiers
+    keys.set("AltLeft", stable_keys::ALT_LEFT)?;
+    keys.set("AltRight", stable_keys::ALT_RIGHT)?;
+    keys.set("ControlLeft", stable_keys::CONTROL_LEFT)?;
+    keys.set("ControlRight", stable_keys::CONTROL_RIGHT)?;
+    keys.set("ShiftLeft", stable_keys::SHIFT_LEFT)?;
+    keys.set("ShiftRight", stable_keys::SHIFT_RIGHT)?;
+    keys.set("SuperLeft", stable_keys::SUPER_LEFT)?;
+    keys.set("SuperRight", stable_keys::SUPER_RIGHT)?;
+
+    // Special keys
+    keys.set("Backspace", stable_keys::BACKSPACE)?;
+    keys.set("CapsLock", stable_keys::CAPS_LOCK)?;
+    keys.set("ContextMenu", stable_keys::CONTEXT_MENU)?;
+    keys.set("Enter", stable_keys::ENTER)?;
+    keys.set("Space", stable_keys::SPACE)?;
+    keys.set("Tab", stable_keys::TAB)?;
+
+    // Arrow keys
+    keys.set("ArrowDown", stable_keys::ARROW_DOWN)?;
+    keys.set("ArrowLeft", stable_keys::ARROW_LEFT)?;
+    keys.set("ArrowRight", stable_keys::ARROW_RIGHT)?;
+    keys.set("ArrowUp", stable_keys::ARROW_UP)?;
+
+    // Navigation
+    keys.set("End", stable_keys::END)?;
+    keys.set("Home", stable_keys::HOME)?;
+    keys.set("PageDown", stable_keys::PAGE_DOWN)?;
+    keys.set("PageUp", stable_keys::PAGE_UP)?;
+
+    // Function keys
+    keys.set("F1", stable_keys::F1)?;
+    keys.set("F2", stable_keys::F2)?;
+    keys.set("F3", stable_keys::F3)?;
+    keys.set("F4", stable_keys::F4)?;
+    keys.set("F5", stable_keys::F5)?;
+    keys.set("F6", stable_keys::F6)?;
+    keys.set("F7", stable_keys::F7)?;
+    keys.set("F8", stable_keys::F8)?;
+    keys.set("F9", stable_keys::F9)?;
+    keys.set("F10", stable_keys::F10)?;
+    keys.set("F11", stable_keys::F11)?;
+    keys.set("F12", stable_keys::F12)?;
+
+    // Numpad
+    keys.set("Numpad0", stable_keys::NUMPAD_0)?;
+    keys.set("Numpad1", stable_keys::NUMPAD_1)?;
+    keys.set("Numpad2", stable_keys::NUMPAD_2)?;
+    keys.set("Numpad3", stable_keys::NUMPAD_3)?;
+    keys.set("Numpad4", stable_keys::NUMPAD_4)?;
+    keys.set("Numpad5", stable_keys::NUMPAD_5)?;
+    keys.set("Numpad6", stable_keys::NUMPAD_6)?;
+    keys.set("Numpad7", stable_keys::NUMPAD_7)?;
+    keys.set("Numpad8", stable_keys::NUMPAD_8)?;
+    keys.set("Numpad9", stable_keys::NUMPAD_9)?;
+    keys.set("NumpadAdd", stable_keys::NUMPAD_ADD)?;
+    keys.set("NumpadDecimal", stable_keys::NUMPAD_DECIMAL)?;
+    keys.set("NumpadDivide", stable_keys::NUMPAD_DIVIDE)?;
+    keys.set("NumpadMultiply", stable_keys::NUMPAD_MULTIPLY)?;
+    keys.set("NumpadSubtract", stable_keys::NUMPAD_SUBTRACT)?;
+    keys.set("NumpadEnter", stable_keys::NUMPAD_ENTER)?;
+
+    // International
+    keys.set("IntlBackslash", stable_keys::INTL_BACKSLASH)?;
+    keys.set("IntlRo", stable_keys::INTL_RO)?;
+    keys.set("IntlYen", stable_keys::INTL_YEN)?;
+
     Ok(keys)
 }
 

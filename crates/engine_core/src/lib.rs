@@ -6,6 +6,7 @@ pub mod metrics;
 pub mod present_pass_math;
 pub mod renderer;
 pub mod resources;
+pub mod stable_keys;
 pub mod state;
 pub mod time;
 pub mod window;

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use mlua::{Function, Lua, Table, Value, Variadic};
+use mlua::{Function, Lua, Table, Value};
 
 pub struct LuaSandbox {
     lua: Lua,
@@ -26,14 +26,20 @@ impl LuaSandbox {
         ] {
             if let Ok(v) = globals.get::<Value>(name) {
                 if let Err(e) = safe.set(name, v) {
-                    return Err(anyhow::Error::msg(format!("safe.set {} failed: {}", name, e)));
+                    return Err(anyhow::Error::msg(format!(
+                        "safe.set {} failed: {}",
+                        name, e
+                    )));
                 }
             }
         }
         for lib in ["math", "table", "utf8"] {
             if let Ok(v) = globals.get::<Value>(lib) {
                 if let Err(e) = safe.set(lib, v) {
-                    return Err(anyhow::Error::msg(format!("safe.set {} failed: {}", lib, e)));
+                    return Err(anyhow::Error::msg(format!(
+                        "safe.set {} failed: {}",
+                        lib, e
+                    )));
                 }
             }
         }
@@ -49,7 +55,10 @@ impl LuaSandbox {
 
         // Store safe_base for use when loading scripts
         if let Err(e) = self.lua.set_named_registry_value("safe_base", safe) {
-            return Err(anyhow::Error::msg(format!("set_named_registry_value failed: {}", e)));
+            return Err(anyhow::Error::msg(format!(
+                "set_named_registry_value failed: {}",
+                e
+            )));
         }
         Ok(())
     }
@@ -141,53 +150,30 @@ impl LuaSandbox {
                 .map_err(|e| anyhow::Error::msg(format!("env.set engine failed: {}", e)))?;
         }
 
-        // Override math.random to route via engine.random
-        if let Ok(engine_tbl) = env.get::<Table>("engine") {
-            let engine_tbl_for_rand = engine_tbl.clone();
-            let rand_func = self
-                .lua
-                .create_function(move |_, args: Variadic<f64>| {
-                    let f: Function = engine_tbl_for_rand.get("random")?;
-                    let r: f64 = f.call::<f64>(())?; // [0,1)
-                    match args.len() {
-                        0 => Ok(r),
-                        1 => {
-                            let n = args[0].floor() as i64;
-                            if n <= 0 { return Err(mlua::Error::RuntimeError("math.random(n): n must be > 0".into())); }
-                            Ok(((r * n as f64).floor() as i64 + 1) as f64)
-                        }
-                        2 => {
-                            let a = args[0].floor() as i64;
-                            let b = args[1].floor() as i64;
-                            if b < a { return Err(mlua::Error::RuntimeError("math.random(m,n): n must be >= m".into())); }
-                            let range = (b - a + 1) as f64;
-                            Ok((a + (r * range).floor() as i64) as f64)
-                        }
-                        _ => Err(mlua::Error::RuntimeError("math.random: too many arguments".into())),
-                    }
-                })
-                .map_err(|e| anyhow::Error::msg(format!("create math.random failed: {}", e)))?;
-
-            let safe_base: Table = self
-                .lua
-                .named_registry_value("safe_base")
-                .map_err(|e| anyhow::Error::msg(format!("get safe_base failed: {}", e)))?;
-            if let Ok(safe_math) = safe_base.get::<Table>("math") {
-                let math_override = self.lua.create_table().map_err(|e| anyhow::Error::msg(format!("create_table failed: {}", e)))?;
-                let mtm = self.lua.create_table().map_err(|e| anyhow::Error::msg(format!("create_table failed: {}", e)))?;
-                mtm.set("__index", safe_math).map_err(|e| anyhow::Error::msg(format!("set __index failed: {}", e)))?;
-                math_override.set_metatable(Some(mtm));
-                math_override.set("random", rand_func).map_err(|e| anyhow::Error::msg(format!("set math.random failed: {}", e)))?;
-                env.set("math", math_override).map_err(|e| anyhow::Error::msg(format!("env.set math failed: {}", e)))?;
-            }
-        }
+        // Inject math.random shim to use the deterministic engine RNG.
+        let math_random_shim = r#"
+  do
+    local r = engine.random
+    function math.random(a,b)
+      if a == nil then return r()
+      elseif b == nil then return math.floor(r()*a) + 1
+      else return math.floor(r()*(b-a+1)) + a end
+    end
+  end
+"#;
+        self.lua
+            .load(math_random_shim)
+            .set_name("math.random shim")
+            .set_environment(env.clone())
+            .exec()
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Load and run chunk in this environment
         let chunk = self.lua.load(script_content).set_name(script_name);
         let chunk = chunk.set_environment(env.clone());
-        chunk
-            .exec()
-            .map_err(|e| anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e)))?;
+        chunk.exec().map_err(|e| {
+            anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e))
+        })?;
 
         // Remember current env for function lookups
         self.lua
@@ -224,53 +210,30 @@ impl LuaSandbox {
                 .map_err(|e| anyhow::Error::msg(format!("env.set engine failed: {}", e)))?;
         }
 
-        // Override math.random on reload as well
-        if let Ok(engine_tbl) = env.get::<Table>("engine") {
-            let engine_tbl_for_rand = engine_tbl.clone();
-            let rand_func = self
-                .lua
-                .create_function(move |_, args: Variadic<f64>| {
-                    let f: Function = engine_tbl_for_rand.get("random")?;
-                    let r: f64 = f.call::<f64>(())?;
-                    match args.len() {
-                        0 => Ok(r),
-                        1 => {
-                            let n = args[0].floor() as i64;
-                            if n <= 0 { return Err(mlua::Error::RuntimeError("math.random(n): n must be > 0".into())); }
-                            Ok(((r * n as f64).floor() as i64 + 1) as f64)
-                        }
-                        2 => {
-                            let a = args[0].floor() as i64;
-                            let b = args[1].floor() as i64;
-                            if b < a { return Err(mlua::Error::RuntimeError("math.random(m,n): n must be >= m".into())); }
-                            let range = (b - a + 1) as f64;
-                            Ok((a + (r * range).floor() as i64) as f64)
-                        }
-                        _ => Err(mlua::Error::RuntimeError("math.random: too many arguments".into())),
-                    }
-                })
-                .map_err(|e| anyhow::Error::msg(format!("create math.random failed: {}", e)))?;
-
-            let safe_base: Table = self
-                .lua
-                .named_registry_value("safe_base")
-                .map_err(|e| anyhow::Error::msg(format!("get safe_base failed: {}", e)))?;
-            if let Ok(safe_math) = safe_base.get::<Table>("math") {
-                let math_override = self.lua.create_table().map_err(|e| anyhow::Error::msg(format!("create_table failed: {}", e)))?;
-                let mtm = self.lua.create_table().map_err(|e| anyhow::Error::msg(format!("create_table failed: {}", e)))?;
-                mtm.set("__index", safe_math).map_err(|e| anyhow::Error::msg(format!("set __index failed: {}", e)))?;
-                math_override.set_metatable(Some(mtm));
-                math_override.set("random", rand_func).map_err(|e| anyhow::Error::msg(format!("set math.random failed: {}", e)))?;
-                env.set("math", math_override).map_err(|e| anyhow::Error::msg(format!("env.set math failed: {}", e)))?;
-            }
-        }
+        // Inject math.random shim to use the deterministic engine RNG.
+        let math_random_shim = r#"
+  do
+    local r = engine.random
+    function math.random(a,b)
+      if a == nil then return r()
+      elseif b == nil then return math.floor(r()*a) + 1
+      else return math.floor(r()*(b-a+1)) + a end
+    end
+  end
+"#;
+        self.lua
+            .load(math_random_shim)
+            .set_name("math.random shim")
+            .set_environment(env.clone())
+            .exec()
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         // Load script into new env
         let chunk = self.lua.load(script_content).set_name(script_name);
         let chunk = chunk.set_environment(env.clone());
-        chunk
-            .exec()
-            .map_err(|e| anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e)))?;
+        chunk.exec().map_err(|e| {
+            anyhow::Error::msg(format!("Failed to load script {}: {}", script_name, e))
+        })?;
 
         // Call new env's on_start() first to (re)initialize arrays/tables
         if let Ok(on_start) = env.get::<mlua::Function>("on_start") {

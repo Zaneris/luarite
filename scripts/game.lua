@@ -2,6 +2,8 @@
 
 assert(engine.api_version == 1)
 
+local K = engine.keys
+
 -- Deterministic RNG for replay
 engine.seed(1337)
 
@@ -30,8 +32,8 @@ local fb
 
 local function reset_ball()
   bx, by = w*0.5, h*0.5
-  local dirx = (math.random() < 0.5) and -1 or 1
-  local diry = (math.random() < 0.5) and -1 or 1
+  local dirx = engine.random_bool() and -1 or 1
+  local diry = engine.random_bool() and -1 or 1
   vx, vy = dirx*BASE_VX, diry*BASE_VY
 end
 
@@ -42,8 +44,8 @@ local function aabb_hit(cx, cy, hw, hh, x, y, s)
 end
 
 local function axis(inp, posKey, negKey)
-  local p = inp:get_key(posKey) and 1 or 0
-  local n = inp:get_key(negKey) and -1 or 0
+  local p = inp:down(posKey) and 1 or 0
+  local n = inp:down(negKey) and -1 or 0
   return p + n
 end
 
@@ -63,18 +65,18 @@ function on_start()
   px_r, py_r = w-20.0, h*0.5
   reset_ball()
 
-  -- Static sprite attributes set once
-  S:set_tex(1, background, tex); S:set_color(1, 0.1,0.1,0.1,1.0); S:set_uv_rect(1, 0.0,0.0,1.0,1.0) -- Gray background
-  S:set_tex(2, paddle_l, tex); S:set_color(2, 0.2,0.8,0.2,1.0); if atlas then S:set_named_uv(2, atlas, "paddle") else S:set_uv_rect(2, 0.0,0.0,1.0,1.0) end
-  S:set_tex(3, paddle_r, tex); S:set_color(3, 0.2,0.2,0.8,1.0); if atlas then S:set_named_uv(3, atlas, "paddle") else S:set_uv_rect(3, 0.0,0.0,1.0,1.0) end
-  S:set_tex(4, ball,     tex); S:set_color(4, 0.9,0.9,0.2,1.0); if atlas then S:set_named_uv(4, atlas, "ball")   else S:set_uv_rect(4, 0.0,0.0,1.0,1.0) end
+  -- Static sprite attributes set once with z-values for proper depth ordering
+  S:set_tex(1, background, tex); S:set_color(1, 0.1,0.1,0.1,1.0); S:set_uv_rect(1, 0.0,0.0,1.0,1.0); S:set_z(1, -1.0) -- Background behind everything
+  S:set_tex(2, paddle_l, tex); S:set_color(2, 0.2,0.8,0.2,1.0); if atlas then S:set_named_uv(2, atlas, "paddle") else S:set_uv_rect(2, 0.0,0.0,1.0,1.0) end; S:set_z(2, 0.0) -- Paddles on main layer
+  S:set_tex(3, paddle_r, tex); S:set_color(3, 0.2,0.2,0.8,1.0); if atlas then S:set_named_uv(3, atlas, "paddle") else S:set_uv_rect(3, 0.0,0.0,1.0,1.0) end; S:set_z(3, 0.0) -- Paddles on main layer
+  S:set_tex(4, ball,     tex); S:set_color(4, 0.9,0.9,0.2,1.0); if atlas then S:set_named_uv(4, atlas, "ball")   else S:set_uv_rect(4, 0.0,0.0,1.0,1.0) end; S:set_z(4, 1.0) -- Ball in front
   fb = engine.frame_builder(T, S)
 end
 
 function on_update(dt)
   local inp = engine.get_input()
-  local dyL = axis(inp, "KeyW", "KeyS")
-  local dyR = axis(inp, "ArrowUp", "ArrowDown")
+  local dyL = axis(inp, K.KeyW, K.KeyS)
+  local dyR = axis(inp, K.ArrowUp, K.ArrowDown)
 
   local phh = PADDLE_H*0.5
   py_l = math.min(math.max(py_l + dyL*SPEED_PADDLE*dt, phh), h - phh)

@@ -1,7 +1,12 @@
 use crate::state::VirtualResolution;
 
 /// Calculates the basic scale factor to fit virtual canvas into window
-pub fn calculate_base_scale(window_width: f32, window_height: f32, virtual_width: f32, virtual_height: f32) -> f32 {
+pub fn calculate_base_scale(
+    window_width: f32,
+    window_height: f32,
+    virtual_width: f32,
+    virtual_height: f32,
+) -> f32 {
     (window_width / virtual_width).min(window_height / virtual_height)
 }
 
@@ -26,7 +31,7 @@ pub fn calculate_final_scaling(base_scale: f32, virtual_mode: VirtualResolution)
             // HD mode: use integer scaling if within 5% tolerance, otherwise linear
             let ideal_scale = (base_scale * 100.0).round() / 100.0;
             let nearest_int_scale = base_scale.round();
-            
+
             if (ideal_scale - nearest_int_scale).abs() < 0.05 {
                 ScalingResult {
                     scale: nearest_int_scale,
@@ -61,11 +66,11 @@ pub fn calculate_letterbox_rect(
 ) -> LetterboxResult {
     let scaled_width = virtual_width * final_scale;
     let scaled_height = virtual_height * final_scale;
-    
+
     // Center the scaled canvas in the window
     let x = (window_width - scaled_width) * 0.5;
     let y = (window_height - scaled_height) * 0.5;
-    
+
     LetterboxResult {
         x,
         y,
@@ -87,10 +92,17 @@ pub fn calculate_present_pass_transform(
     virtual_height: f32,
     virtual_mode: VirtualResolution,
 ) -> (LetterboxResult, bool) {
-    let base_scale = calculate_base_scale(window_width, window_height, virtual_width, virtual_height);
+    let base_scale =
+        calculate_base_scale(window_width, window_height, virtual_width, virtual_height);
     let scaling = calculate_final_scaling(base_scale, virtual_mode);
-    let letterbox = calculate_letterbox_rect(window_width, window_height, virtual_width, virtual_height, scaling.scale);
-    
+    let letterbox = calculate_letterbox_rect(
+        window_width,
+        window_height,
+        virtual_width,
+        virtual_height,
+        scaling.scale,
+    );
+
     (letterbox, scaling.use_linear_filtering)
 }
 
@@ -103,11 +115,11 @@ mod tests {
         // Window wider than virtual canvas (height is limiting factor)
         // width_scale = 800/320 = 2.5, height_scale = 600/180 = 3.33, min = 2.5
         assert_eq!(calculate_base_scale(800.0, 600.0, 320.0, 180.0), 2.5);
-        
-        // Window taller than virtual canvas (width is limiting factor)  
+
+        // Window taller than virtual canvas (width is limiting factor)
         // width_scale = 400/320 = 1.25, height_scale = 800/180 = 4.44, min = 1.25
         assert_eq!(calculate_base_scale(400.0, 800.0, 320.0, 180.0), 1.25);
-        
+
         // Perfect aspect ratio match
         assert_eq!(calculate_base_scale(640.0, 360.0, 320.0, 180.0), 2.0);
     }
@@ -118,7 +130,7 @@ mod tests {
         let result = calculate_final_scaling(2.7, VirtualResolution::Retro320x180);
         assert_eq!(result.scale, 2.0);
         assert!(!result.use_linear_filtering);
-        
+
         // Should enforce minimum scale of 1.0
         let result = calculate_final_scaling(0.5, VirtualResolution::Retro320x180);
         assert_eq!(result.scale, 1.0);
@@ -131,12 +143,12 @@ mod tests {
         let result = calculate_final_scaling(2.0, VirtualResolution::Hd1920x1080);
         assert_eq!(result.scale, 2.0);
         assert!(!result.use_linear_filtering);
-        
+
         // Within 5% tolerance (1.97) should round to integer
         let result = calculate_final_scaling(1.97, VirtualResolution::Hd1920x1080);
         assert_eq!(result.scale, 2.0);
         assert!(!result.use_linear_filtering);
-        
+
         // Outside tolerance should use linear
         let result = calculate_final_scaling(1.5, VirtualResolution::Hd1920x1080);
         assert_eq!(result.scale, 1.5);
@@ -146,7 +158,7 @@ mod tests {
     #[test]
     fn test_letterbox_calculation() {
         let result = calculate_letterbox_rect(800.0, 600.0, 320.0, 180.0, 2.0);
-        
+
         // Scaled canvas: 640x360
         // Centered in 800x600 window: x=(800-640)/2=80, y=(600-360)/2=120
         assert_eq!(result.x, 80.0);
@@ -159,10 +171,10 @@ mod tests {
     fn test_pixel_to_ndc() {
         // Left edge of 800px window
         assert_eq!(pixel_to_ndc(0.0, 800.0), -1.0);
-        
-        // Right edge of 800px window  
+
+        // Right edge of 800px window
         assert_eq!(pixel_to_ndc(800.0, 800.0), 1.0);
-        
+
         // Center of 800px window
         assert_eq!(pixel_to_ndc(400.0, 800.0), 0.0);
     }

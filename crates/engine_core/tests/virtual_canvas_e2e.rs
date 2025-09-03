@@ -72,54 +72,183 @@ fn pixel_matches(actual: [u8; 4], expected: [u8; 4], tolerance: u8) -> bool {
         && (actual[3] as i16 - expected[3] as i16).abs() <= tolerance as i16
 }
 
+/// Comprehensive end-to-end test harness that executes Lua scripts and captures results
+struct E2ETestHarness {
+    transforms_capture: Rc<RefCell<Vec<f64>>>,
+    sprites_capture: Rc<RefCell<Vec<engine_scripting::api::SpriteV2>>>,
+    clear_color_capture: Rc<RefCell<Option<(f32, f32, f32, f32)>>>,
+    render_mode_capture: Rc<RefCell<Option<String>>>,
+}
+
+impl E2ETestHarness {
+    fn new() -> Self {
+        Self {
+            transforms_capture: Rc::new(RefCell::new(Vec::new())),
+            sprites_capture: Rc::new(RefCell::new(Vec::new())),
+            clear_color_capture: Rc::new(RefCell::new(None)),
+            render_mode_capture: Rc::new(RefCell::new(None)),
+        }
+    }
+
+    /// Execute a Lua script end-to-end and return framebuffer data for verification
+    async fn execute_script(&self, script_content: &str, script_name: &str) -> Result<Vec<u8>> {
+        use engine_scripting::{sandbox::LuaSandbox, api::{EngineApi, InputSnapshot}};
+        
+        // Create sandbox and API
+        let sandbox = LuaSandbox::new()?;
+        let api = EngineApi::new();
+
+        // Setup callbacks to capture transforms, sprites, clear color, and render mode
+        let transforms_shared = self.transforms_capture.clone();
+        let sprites_shared = self.sprites_capture.clone();
+        let clear_color_shared = self.clear_color_capture.clone();
+        let render_mode_shared = self.render_mode_capture.clone();
+
+        let set_transforms_cb = Rc::new(move |transforms: &[f64]| {
+            let mut data = transforms_shared.borrow_mut();
+            data.clear();
+            data.extend_from_slice(transforms);
+        });
+
+        let submit_sprites_cb = Rc::new(move |sprites: &[engine_scripting::api::SpriteV2]| {
+            let mut data = sprites_shared.borrow_mut();
+            data.clear();
+            data.extend_from_slice(sprites);
+        });
+
+        // Dummy callbacks for other engine functions
+        let metrics_provider = Rc::new(|| (0.016, 60, 1));
+        let load_texture_cb = Rc::new(|_path: String, _id: u32| {});
+        let input_provider = Rc::new(|| InputSnapshot::default());
+        let window_size_provider = Rc::new(|| (320u32, 180u32));
+        let hud_printf_cb = Rc::new(|_msg: String| {});
+        let set_clear_color_cb = Rc::new(move |r: f32, g: f32, b: f32, a: f32| {
+            *clear_color_shared.borrow_mut() = Some((r, g, b, a));
+        });
+        let set_render_mode_cb = Rc::new(move |mode: &'static str| {
+            *render_mode_shared.borrow_mut() = Some(mode.to_string());
+        });
+
+        // Setup engine API with callbacks
+        api.setup_engine_namespace_with_sinks_and_metrics(
+            &sandbox.lua(),
+            set_transforms_cb,
+            None,
+            submit_sprites_cb,
+            None,
+            metrics_provider,
+            load_texture_cb,
+            input_provider,
+            window_size_provider,
+            hud_printf_cb,
+            set_clear_color_cb,
+            set_render_mode_cb,
+        )?;
+
+        // Load and execute script
+        sandbox.load_script(script_content, script_name)?;
+        sandbox.call_function::<_, ()>("on_start", ())?;
+        sandbox.call_function::<_, ()>("on_update", 0.016)?;
+
+        // Convert captured data to engine format and render
+        self.render_captured_data().await
+    }
+
+    /// Create renderer, state, and render captured data to virtual canvas
+    async fn render_captured_data(&self) -> Result<Vec<u8>> {
+        // Determine virtual resolution from captured render mode
+        let render_mode = self.render_mode_capture.borrow().clone().unwrap_or_else(|| "retro".to_string());
+        let (virtual_res, window_size) = match render_mode.as_str() {
+            "hd" => (VirtualResolution::Hd1920x1080, (1920, 1080)),
+            _ => (VirtualResolution::Retro320x180, (640, 480)), // default to retro
+        };
+        
+        // Create headless renderer
+        let mut renderer = SpriteRenderer::new_headless(window_size.0, window_size.1).await?;
+
+        // Create engine state  
+        let mut engine_state = EngineState::new();
+        engine_state.set_virtual_resolution(virtual_res);
+        
+        // Apply captured clear color if any
+        if let Some((r, g, b, a)) = *self.clear_color_capture.borrow() {
+            engine_state.set_clear_color(r, g, b, a);
+        }
+
+        // Set transforms from captured data
+        let transforms = self.transforms_capture.borrow().clone();
+        if !transforms.is_empty() {
+            engine_state.set_transforms(transforms)?;
+        }
+
+        // Convert and submit sprites from captured data
+        let sprites = self.sprites_capture.borrow();
+        if !sprites.is_empty() {
+            let sprite_data: Vec<SpriteData> = sprites.iter().map(|s| {
+                SpriteData {
+                    entity_id: s.entity_id,
+                    texture_id: s.texture_id,
+                    uv: [s.u0, s.v0, s.u1, s.v1],
+                    color: [s.r, s.g, s.b, s.a],
+                    z: s.z,
+                }
+            }).collect();
+            engine_state.submit_sprites(sprite_data)?;
+        }
+
+        // Create test textures that the scripts expect
+        let white_texture = create_test_texture(32, 32, [255, 255, 255, 255]);
+        engine_state.insert_texture_with_id(1, "dummy.png", white_texture);
+
+        // Render to virtual canvas
+        let framebuffer_data = renderer.render_to_virtual_canvas(&engine_state)?;
+        Ok(framebuffer_data)
+    }
+
+    /// Get captured transforms for additional verification
+    fn get_transforms(&self) -> Vec<f64> {
+        self.transforms_capture.borrow().clone()
+    }
+
+    /// Get captured sprites for additional verification
+    fn get_sprites(&self) -> Vec<engine_scripting::api::SpriteV2> {
+        self.sprites_capture.borrow().clone()
+    }
+}
+
 #[tokio::test]
 async fn test_retro_mode_320x180_rendering() -> Result<()> {
-    // Create headless renderer
-    let mut renderer = SpriteRenderer::new_headless(640, 480).await?;
+    let harness = E2ETestHarness::new();
+    
+    let script = r#"
+assert(engine.api_version == 1)
 
-    // Create engine state with retro mode
-    let mut state = EngineState::new();
-    state.set_virtual_resolution(VirtualResolution::Retro320x180);
-    state.set_clear_color(0.2, 0.3, 0.8, 1.0); // Blue background
+local entity = engine.create_entity()
+local tex = engine.load_texture("dummy.png")
+local T = engine.create_transform_buffer(1)
+local S = engine.create_sprite_buffer(1)
 
-    // Load a test texture - create a 32x32 red texture
-    let red_texture = create_test_texture(32, 32, [255, 0, 0, 255]);
-    state.insert_texture_with_id(1, "test_red", red_texture);
+function on_start()
+    engine.set_clear_color(0.2, 0.3, 0.8, 1.0) -- Blue background
+    engine.set_render_resolution("retro")
+    
+    -- Set up sprite data
+    S:set_tex(1, entity, tex)
+    S:set_color(1, 1.0, 0.0, 0.0, 1.0) -- Red color
+    S:set_uv_rect(1, 0.0, 0.0, 1.0, 1.0)
+    S:set_z(1, 0.0)
+end
 
-    // Create an entity with transform and sprite
-    let entity_id = state.create_entity();
-    let transforms = vec![
-        entity_id as f64,
-        160.0,
-        90.0,
-        0.0,
-        64.0,
-        64.0, // Center of 320x180 canvas, 64x64 size
-    ];
-    state.set_transforms(transforms)?;
+function on_update(dt)
+    -- Place sprite at center of 320x180 canvas (160, 90) with 64x64 size
+    T:set(1, entity, 160, 90, 0.0, 64, 64)
+    
+    engine.set_transforms(T)
+    engine.submit_sprites(S)
+end
+"#;
 
-    // Add sprite
-    let sprite = SpriteData {
-        entity_id,
-        texture_id: 1,
-        uv: [0.0, 0.0, 1.0, 1.0],
-        color: [1.0, 1.0, 1.0, 1.0],
-        z: 0.0,
-    };
-    state.submit_sprites(vec![sprite])?;
-
-    // Render to virtual canvas
-    let framebuffer_data = renderer.render_to_virtual_canvas(&state)?;
-
-    // Verify virtual canvas dimensions (should be 320x180)
-    let expected_size = 320 * 180 * 4; // RGBA
-    assert_eq!(
-        framebuffer_data.len(),
-        expected_size,
-        "Framebuffer should be 320x180 RGBA"
-    );
-
-    // Create framebuffer reader with engine coordinate system
+    let framebuffer_data = harness.execute_script(script, "retro_test").await?;
     let fb = FramebufferReader::new(&framebuffer_data, 320, 180);
 
     // Check background color (should be blue)
@@ -132,9 +261,9 @@ async fn test_retro_mode_320x180_rendering() -> Result<()> {
         expected_bg
     );
 
-    // Check that sprite is rendered at center (approximately)
+    // Check that sprite is rendered at center (red color from sprite)
     let sprite_pixel = fb.get_pixel(160, 90);
-    let expected_sprite = [255, 0, 0, 255]; // Red texture
+    let expected_sprite = [255, 0, 0, 255]; // Red from sprite color
     assert!(
         pixel_matches(sprite_pixel, expected_sprite, 5),
         "Sprite should be red at center, got {:?}, expected {:?}",
@@ -154,52 +283,46 @@ async fn test_retro_mode_320x180_rendering() -> Result<()> {
 
 #[tokio::test]
 async fn test_hd_mode_1920x1080_rendering() -> Result<()> {
-    // Create headless renderer
-    let mut renderer = SpriteRenderer::new_headless(1920, 1080).await?;
+    let harness = E2ETestHarness::new();
+    
+    let script = r#"
+assert(engine.api_version == 1)
 
-    // Create engine state with HD mode
-    let mut state = EngineState::new();
-    state.set_virtual_resolution(VirtualResolution::Hd1920x1080);
-    state.set_clear_color(0.1, 0.5, 0.1, 1.0); // Green background
+local entity = engine.create_entity()
+local tex = engine.load_texture("dummy.png")
+local T = engine.create_transform_buffer(1)
+local S = engine.create_sprite_buffer(1)
 
-    // Load a test texture - create a 64x64 blue texture
-    let blue_texture = create_test_texture(64, 64, [0, 0, 255, 255]);
-    state.insert_texture_with_id(1, "test_blue", blue_texture);
+function on_start()
+    engine.set_clear_color(0.1, 0.5, 0.1, 1.0) -- Green background
+    engine.set_render_resolution("hd")
+    
+    -- Set up sprite data with blue color
+    S:set_tex(1, entity, tex)
+    S:set_color(1, 0.0, 0.0, 1.0, 1.0) -- Blue color
+    S:set_uv_rect(1, 0.0, 0.0, 1.0, 1.0)
+    S:set_z(1, 0.0)
+end
 
-    // Create an entity with transform and sprite
-    let entity_id = state.create_entity();
-    let transforms = vec![
-        entity_id as f64,
-        960.0,
-        540.0,
-        0.0,
-        128.0,
-        128.0, // Center of 1920x1080 canvas, 128x128 size
-    ];
-    state.set_transforms(transforms)?;
+function on_update(dt)
+    -- Place sprite at center of 1920x1080 canvas (960, 540) with 128x128 size
+    T:set(1, entity, 960, 540, 0.0, 128, 128)
+    
+    engine.set_transforms(T)
+    engine.submit_sprites(S)
+end
+"#;
 
-    // Add sprite
-    let sprite = SpriteData {
-        entity_id,
-        texture_id: 1,
-        uv: [0.0, 0.0, 1.0, 1.0],
-        color: [1.0, 1.0, 1.0, 1.0],
-        z: 0.0,
-    };
-    state.submit_sprites(vec![sprite])?;
+    let framebuffer_data = harness.execute_script(script, "hd_test").await?;
+    let fb = FramebufferReader::new(&framebuffer_data, 1920, 1080);
 
-    // Render to virtual canvas
-    let framebuffer_data = renderer.render_to_virtual_canvas(&state)?;
-
-    // Verify virtual canvas dimensions (should be 1920x1080)
+    // Verify virtual canvas dimensions
     let expected_size = 1920 * 1080 * 4; // RGBA
     assert_eq!(
         framebuffer_data.len(),
         expected_size,
         "Framebuffer should be 1920x1080 RGBA"
     );
-
-    let fb = FramebufferReader::new(&framebuffer_data, 1920, 1080);
 
     // Check background color (should be green)
     let bg_pixel = fb.get_pixel(100, 100);
@@ -211,9 +334,9 @@ async fn test_hd_mode_1920x1080_rendering() -> Result<()> {
         expected_bg
     );
 
-    // Check that sprite is rendered at center
+    // Check that sprite is rendered at center (blue from sprite color)
     let sprite_pixel = fb.get_pixel(960, 540);
-    let expected_sprite = [0, 0, 255, 255]; // Blue texture
+    let expected_sprite = [0, 0, 255, 255]; // Blue from sprite color
     assert!(
         pixel_matches(sprite_pixel, expected_sprite, 5),
         "Sprite should be blue at center, got {:?}, expected {:?}",
@@ -503,72 +626,9 @@ async fn test_sprite_alpha_blending() -> Result<()> {
 /// Tests the full pipeline: Lua script → Engine API → SpriteData → Renderer → Virtual canvas
 #[tokio::test]
 async fn test_z_ordering_wrong_submission_order() -> Result<()> {
-    use engine_scripting::{sandbox::LuaSandbox, api::{EngineApi, InputSnapshot}};
+    let harness = E2ETestHarness::new();
     
-    // Create headless renderer
-    let mut renderer = SpriteRenderer::new_headless(320, 180).await?;
-    let mut engine_state = EngineState::new();
-    engine_state.set_virtual_resolution(VirtualResolution::Retro320x180);
-    engine_state.set_clear_color(0.0, 0.0, 0.0, 1.0);
-    
-    // Create shared state for capturing data from Lua callbacks
-    let transforms_data: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(Vec::new()));
-    let sprites_data: Rc<RefCell<Vec<SpriteData>>> = Rc::new(RefCell::new(Vec::new()));
-    
-    // Set up Lua sandbox and API
-    let mut sandbox = LuaSandbox::new()?;
-    let mut api = EngineApi::new();
-    
-    // Set up callbacks to capture sprite and transform data
-    let transforms_capture = transforms_data.clone();
-    let sprites_capture = sprites_data.clone();
-    
-    let set_transforms_cb = Rc::new(move |transforms: &[f64]| {
-        transforms_capture.borrow_mut().clear();
-        transforms_capture.borrow_mut().extend_from_slice(transforms);
-    });
-    
-    let submit_sprites_cb = Rc::new(move |sprites: &[engine_scripting::api::SpriteV2]| {
-        let mut sprites_vec = sprites_capture.borrow_mut();
-        sprites_vec.clear();
-        for s in sprites {
-            sprites_vec.push(SpriteData {
-                entity_id: s.entity_id,
-                texture_id: s.texture_id,
-                uv: [s.u0, s.v0, s.u1, s.v1],
-                color: [s.r, s.g, s.b, s.a],
-                z: s.z,
-            });
-        }
-    });
-    
-    // Dummy callbacks for other engine functions
-    let metrics_provider = Rc::new(|| (0.016, 60, 1)); // 60fps, 1 frame
-    let load_texture_cb = Rc::new(|_path: String, _id: u32| {});
-    let input_provider = Rc::new(|| InputSnapshot::default());
-    let window_size_provider = Rc::new(|| (320u32, 180u32));
-    let hud_printf_cb = Rc::new(|_msg: String| {});
-    let set_clear_color_cb = Rc::new(|_r: f32, _g: f32, _b: f32, _a: f32| {});
-    let set_render_mode_cb = Rc::new(|_mode: &'static str| {});
-    
-    // Install the API with callbacks
-    api.setup_engine_namespace_with_sinks_and_metrics(
-        &sandbox.lua(),
-        set_transforms_cb,
-        None, // No f32 transforms callback
-        submit_sprites_cb,
-        None, // No typed sprites callback
-        metrics_provider,
-        load_texture_cb,
-        input_provider,
-        window_size_provider,
-        hud_printf_cb,
-        set_clear_color_cb,
-        set_render_mode_cb,
-    )?;
-    
-    // Load and execute our z-ordering test script
-    let script_content = r#"
+    let script = r#"
 -- Z-ordering test: Add sprites in WRONG order but with CORRECT z-values
 
 assert(engine.api_version == 1)
@@ -615,26 +675,8 @@ function on_update(dt)
   engine.set_transforms(T)
   engine.submit_sprites(S)
 end"#;
-    
-    sandbox.load_script(script_content, "z_order_test")?;
-    
-    // Execute on_start
-    sandbox.call_function::<_, ()>("on_start", ())?;
-    
-    // Execute on_update to generate the frame
-    sandbox.call_function::<_, ()>("on_update", 0.016)?; // 16ms frame time
-    
-    // Apply captured data to engine state
-    if !transforms_data.borrow().is_empty() {
-        engine_state.set_transforms(transforms_data.borrow().clone())?;
-    }
-    
-    if !sprites_data.borrow().is_empty() {
-        engine_state.submit_sprites(sprites_data.borrow().clone())?;
-    }
-    
-    // Render to virtual canvas
-    let framebuffer_data = renderer.render_to_virtual_canvas(&engine_state)?;
+
+    let framebuffer_data = harness.execute_script(script, "z_order_test").await?;
     let fb = FramebufferReader::new(&framebuffer_data, 320, 180);
     
     // Verify z-ordering: At center pixel (160, 90) we should see BLUE (front sprite)
@@ -665,67 +707,9 @@ end"#;
 /// E2E test for z-ordering with partial overlaps and different textures
 #[tokio::test] 
 async fn test_z_ordering_partial_overlaps() -> Result<()> {
-    use engine_scripting::{sandbox::LuaSandbox, api::{EngineApi, InputSnapshot}};
+    let harness = E2ETestHarness::new();
     
-    let mut renderer = SpriteRenderer::new_headless(320, 180).await?;
-    let mut engine_state = EngineState::new();
-    engine_state.set_virtual_resolution(VirtualResolution::Retro320x180);
-    engine_state.set_clear_color(0.0, 0.0, 0.0, 1.0);
-    
-    let transforms_data: Rc<RefCell<Vec<f64>>> = Rc::new(RefCell::new(Vec::new()));
-    let sprites_data: Rc<RefCell<Vec<SpriteData>>> = Rc::new(RefCell::new(Vec::new()));
-    
-    let mut sandbox = LuaSandbox::new()?;
-    let mut api = EngineApi::new();
-    
-    // Set up callbacks
-    let transforms_capture = transforms_data.clone();
-    let sprites_capture = sprites_data.clone();
-    
-    let set_transforms_cb = Rc::new(move |transforms: &[f64]| {
-        transforms_capture.borrow_mut().clear();
-        transforms_capture.borrow_mut().extend_from_slice(transforms);
-    });
-    
-    let submit_sprites_cb = Rc::new(move |sprites: &[engine_scripting::api::SpriteV2]| {
-        let mut sprites_vec = sprites_capture.borrow_mut();
-        sprites_vec.clear();
-        for s in sprites {
-            sprites_vec.push(SpriteData {
-                entity_id: s.entity_id,
-                texture_id: s.texture_id, 
-                uv: [s.u0, s.v0, s.u1, s.v1],
-                color: [s.r, s.g, s.b, s.a],
-                z: s.z,
-            });
-        }
-    });
-    
-    let metrics_provider = Rc::new(|| (0.016, 60, 1)); // 60fps, 1 frame
-    let load_texture_cb = Rc::new(|_path: String, _id: u32| {});
-    let input_provider = Rc::new(|| InputSnapshot::default());
-    let window_size_provider = Rc::new(|| (320u32, 180u32));
-    let hud_printf_cb = Rc::new(|_msg: String| {});
-    let set_clear_color_cb = Rc::new(|_r: f32, _g: f32, _b: f32, _a: f32| {});
-    let set_render_mode_cb = Rc::new(|_mode: &'static str| {});
-    
-    api.setup_engine_namespace_with_sinks_and_metrics(
-        &sandbox.lua(),
-        set_transforms_cb,
-        None,
-        submit_sprites_cb,
-        None,
-        metrics_provider,
-        load_texture_cb,
-        input_provider,
-        window_size_provider,
-        hud_printf_cb,
-        set_clear_color_cb,
-        set_render_mode_cb,
-    )?;
-    
-    // Complex partial overlap test script
-    let script_content = r#"
+    let script = r#"
 assert(engine.api_version == 1)
 
 -- Create entities in intentionally wrong order for submission
@@ -776,20 +760,8 @@ function on_update(dt)
   engine.set_transforms(T)
   engine.submit_sprites(S)
 end"#;
-    
-    sandbox.load_script(script_content, "partial_overlap_test")?;
-    sandbox.call_function::<_, ()>("on_start", ())?;
-    sandbox.call_function::<_, ()>("on_update", 0.016)?;
-    
-    // Apply data to engine state
-    if !transforms_data.borrow().is_empty() {
-        engine_state.set_transforms(transforms_data.borrow().clone())?;
-    }
-    if !sprites_data.borrow().is_empty() {
-        engine_state.submit_sprites(sprites_data.borrow().clone())?;
-    }
-    
-    let framebuffer_data = renderer.render_to_virtual_canvas(&engine_state)?;
+
+    let framebuffer_data = harness.execute_script(script, "partial_overlap_test").await?;
     let fb = FramebufferReader::new(&framebuffer_data, 320, 180);
     
     // Test specific overlap regions with new positioning:

@@ -8,8 +8,18 @@ use engine_scripting::sandbox::LuaSandbox;
 use std::io::BufRead;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
 use tracing::{info, Level};
 use winit::keyboard::KeyCode;
+
+// Type aliases for complex types to satisfy clippy
+type TypedBuffer = (std::rc::Rc<std::cell::RefCell<Vec<f32>>>, usize, usize);
+type TypedSprites = (
+    std::rc::Rc<std::cell::RefCell<Vec<engine_core::state::SpriteData>>>,
+    usize,
+    usize,
+);
+type SubmitSpritesTypedCallback = Rc<dyn Fn(std::rc::Rc<std::cell::RefCell<Vec<SpriteData>>>, usize, usize)>;
 
 fn main() -> Result<()> {
     // Parse simple CLI flags for record/replay
@@ -40,12 +50,8 @@ fn main() -> Result<()> {
         transforms_dirty: bool,
         transforms_f32: Vec<f32>, // retained legacy typed path (not used by swap path)
         transforms_f32_dirty: bool,
-        typed_buf: Option<(std::rc::Rc<std::cell::RefCell<Vec<f32>>>, usize, usize)>, // (rc buf, rows, cap)
-        typed_sprites: Option<(
-            std::rc::Rc<std::cell::RefCell<Vec<engine_core::state::SpriteData>>>,
-            usize,
-            usize,
-        )>,
+        typed_buf: Option<TypedBuffer>, // (rc buf, rows, cap)
+        typed_sprites: Option<TypedSprites>,
         sprites: Vec<SpriteV2>,       // parsed sprites
         textures: Vec<(u32, String)>, // queued texture loads (id, path)
         // Per-frame drain latches to avoid double-updates within the same frame
@@ -72,7 +78,7 @@ fn main() -> Result<()> {
             }
         }
     }
-    let exchange = Arc::new(Mutex::new(ScriptExchange::default()));
+    let exchange = Rc::new(RefCell::new(ScriptExchange::default()));
 
     // HUD metrics shared with Lua get_metrics()
     #[derive(Clone, Copy, Default)]
@@ -104,25 +110,24 @@ fn main() -> Result<()> {
     {
         let ex1 = exchange.clone();
         let set_transforms_cb = Rc::new(move |slice: &[f64]| {
-            if let Ok(mut ex) = ex1.lock() {
-                ex.transforms.clear();
-                ex.transforms.extend_from_slice(slice);
-                ex.transforms_dirty = true;
-            }
+            let mut ex = ex1.borrow_mut();
+            ex.transforms.clear();
+            ex.transforms.extend_from_slice(slice);
+            ex.transforms_dirty = true;
         });
         let ex2 = exchange.clone();
         let submit_sprites_cb = Rc::new(move |sprites: &[SpriteV2]| {
-            if let Ok(mut ex) = ex2.lock() {
+            {
+                let mut ex = ex2.borrow_mut();
                 ex.sprites.clear();
                 ex.sprites.extend_from_slice(sprites);
             }
         });
         // Typed sprites path: pass engine-owned vec Rc and rows
         let ex_sb = exchange.clone();
-        let submit_sprites_typed_cb: Rc<
-            dyn Fn(std::rc::Rc<std::cell::RefCell<Vec<SpriteData>>>, usize, usize),
-        > = Rc::new(move |rcvec, rows, cap| {
-            if let Ok(mut ex) = ex_sb.lock() {
+        let submit_sprites_typed_cb: SubmitSpritesTypedCallback = Rc::new(move |rcvec, rows, cap| {
+            {
+                let mut ex = ex_sb.borrow_mut();
                 // Capture only the first submission per frame to avoid overwriting
                 if !ex.drained_sprites_this_frame && ex.typed_sprites.is_none() {
                     ex.typed_sprites = Some((rcvec.clone(), rows, cap));
@@ -133,7 +138,8 @@ fn main() -> Result<()> {
         let ex_tf32 = exchange.clone();
         let set_transforms_f32_cb = Rc::new(
             move |rcbuf: std::rc::Rc<std::cell::RefCell<Vec<f32>>>, rows: usize, cap: usize| {
-                if let Ok(mut ex) = ex_tf32.lock() {
+                {
+                    let mut ex = ex_tf32.borrow_mut();
                     // Capture only first per frame; later updates in same frame are ignored by host drain anyway
                     if !ex.drained_tf32_this_frame && ex.typed_buf.is_none() {
                         ex.typed_buf = Some((rcbuf.clone(), rows, cap));
@@ -144,9 +150,8 @@ fn main() -> Result<()> {
         // Queue texture loads from Lua
         let ex3 = exchange.clone();
         let load_texture_cb = Rc::new(move |path: String, id: u32| {
-            if let Ok(mut ex) = ex3.lock() {
-                ex.textures.push((id, path));
-            }
+            let mut ex = ex3.borrow_mut();
+            ex.textures.push((id, path));
         });
         // Provider closure reads latest HUD metrics for Lua
         let hud_provider = {
@@ -218,54 +223,54 @@ fn main() -> Result<()> {
         };
         api.setup_engine_namespace_with_sinks_and_metrics(
             sandbox.lua(),
-            set_transforms_cb,
-            Some(set_transforms_f32_cb),
-            submit_sprites_cb,
-            Some(submit_sprites_typed_cb),
-            hud_provider,
-            load_texture_cb,
-            input_provider,
-            {
-                let ws = window_size.clone();
-                Rc::new(move || {
-                    if let Ok(v) = ws.lock() {
-                        *v
-                    } else {
-                        (1024, 768)
-                    }
-                })
-            },
-            {
-                let h = hud_lines.clone();
-                Rc::new(move |msg: String| {
-                    if let Ok(mut q) = h.lock() {
-                        if q.len() >= 12 {
-                            q.pop_front();
+            engine_scripting::api::EngineCallbacks {
+                set_transforms_cb,
+                set_transforms_f32_cb: Some(set_transforms_f32_cb),
+                submit_sprites_cb,
+                submit_sprites_typed_cb: Some(submit_sprites_typed_cb),
+                metrics_provider: hud_provider,
+                load_texture_cb,
+                input_provider,
+                window_size_provider: {
+                    let ws = window_size.clone();
+                    Rc::new(move || {
+                        if let Ok(v) = ws.lock() {
+                            *v
+                        } else {
+                            (1024, 768)
                         }
-                        q.push_back(msg);
-                    }
-                })
-            },
-            {
-                let ex_cc = exchange.clone();
-                Rc::new(move |r, g, b, a| {
-                    if let Ok(mut ex) = ex_cc.lock() {
+                    })
+                },
+                hud_printf_cb: {
+                    let h = hud_lines.clone();
+                    Rc::new(move |msg: String| {
+                        if let Ok(mut q) = h.lock() {
+                            if q.len() >= 12 {
+                                q.pop_front();
+                            }
+                            q.push_back(msg);
+                        }
+                    })
+                },
+                set_clear_color_cb: {
+                    let ex_cc = exchange.clone();
+                    Rc::new(move |r, g, b, a| {
+                        let mut ex = ex_cc.borrow_mut();
                         ex.clear_color = Some([r, g, b, a]);
-                    }
-                })
-            },
-            {
-                let ex_rm = exchange.clone();
-                Rc::new(move |mode: &'static str| {
-                    if let Ok(mut ex) = ex_rm.lock() {
+                    })
+                },
+                set_render_mode_cb: {
+                    let ex_rm = exchange.clone();
+                    Rc::new(move |mode: &'static str| {
+                        let mut ex = ex_rm.borrow_mut();
                         let resolution = if mode == "retro" {
                             engine_core::state::VirtualResolution::Retro320x180
                         } else {
                             engine_core::state::VirtualResolution::Hd1920x1080
                         };
                         ex.render_mode = Some(resolution);
-                    }
-                })
+                    })
+                },
             },
         )?;
     }
@@ -347,7 +352,8 @@ fn main() -> Result<()> {
             }
 
             // Drain exchange into engine state
-            if let Ok(mut ex) = exchange_for_update.lock() {
+            {
+                let mut ex = exchange_for_update.borrow_mut();
                 if let Some([r, g, b, a]) = ex.clear_color.take() {
                     state.set_clear_color(r, g, b, a);
                 }
@@ -429,10 +435,7 @@ fn main() -> Result<()> {
         // Exchange for resetting per-frame drain flags
         let exchange_reset = exchange.clone();
         // Optional record/replay handles
-        let mut rec_file = match record_path.clone() {
-            Some(p) => Some(std::fs::File::create(p).expect("create record file")),
-            None => None,
-        };
+        let mut rec_file = record_path.clone().map(|p| std::fs::File::create(p).expect("create record file"));
         let mut rep_lines: Option<std::io::Lines<std::io::BufReader<std::fs::File>>> =
             replay_path.clone().map(|p| {
                 let f = std::fs::File::open(p).expect("open replay file");
@@ -531,7 +534,8 @@ fn main() -> Result<()> {
             }
 
             // Reset per-frame drain latches so next frame will drain once again
-            if let Ok(mut ex) = exchange_reset.lock() {
+            {
+                let mut ex = exchange_reset.borrow_mut();
                 ex.drained_tf32_this_frame = false;
                 ex.drained_sprites_this_frame = false;
             }

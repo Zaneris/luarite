@@ -7,6 +7,50 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use winit::keyboard::KeyCode;
 
+// Type aliases to simplify complex function pointer types for clippy
+type SetTransformsCb = Rc<dyn Fn(&[f64])>;
+type SetTransformsF32Cb = Option<Rc<dyn Fn(Rc<RefCell<Vec<f32>>>, usize, usize)>>;
+type SubmitSpritesCb = Rc<dyn Fn(&[SpriteV2])>;
+type SubmitSpritesTypedCb = Option<Rc<dyn Fn(Rc<RefCell<Vec<SpriteData>>>, usize, usize)>>;
+type MetricsProviderCb = Rc<dyn Fn() -> (f64, u32, u32)>;
+type LoadTextureCb = Rc<dyn Fn(String, u32)>;
+type InputProviderCb = Rc<dyn Fn() -> InputSnapshot>;
+type WindowSizeProviderCb = Rc<dyn Fn() -> (u32, u32)>;
+type HudPrintfCb = Rc<dyn Fn(String)>;
+type SetClearColorCb = Rc<dyn Fn(f32, f32, f32, f32)>;
+type SetRenderModeCb = Rc<dyn Fn(&'static str)>;
+
+/// Complex tuple type for sprite texture parameters
+type SpriteTexParams = (
+    usize,
+    AnyUserData,
+    AnyUserData,
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    f32,
+    Option<f32>,
+);
+
+/// Callback configuration for the extended engine namespace
+pub struct EngineCallbacks {
+    pub set_transforms_cb: SetTransformsCb,
+    pub set_transforms_f32_cb: SetTransformsF32Cb,
+    pub submit_sprites_cb: SubmitSpritesCb,
+    pub submit_sprites_typed_cb: SubmitSpritesTypedCb,
+    pub metrics_provider: MetricsProviderCb,
+    pub load_texture_cb: LoadTextureCb,
+    pub input_provider: InputProviderCb,
+    pub window_size_provider: WindowSizeProviderCb,
+    pub hud_printf_cb: HudPrintfCb,
+    pub set_clear_color_cb: SetClearColorCb,
+    pub set_render_mode_cb: SetRenderModeCb,
+}
+
 /// Current engine API version
 pub const API_VERSION: u32 = 1;
 
@@ -984,10 +1028,10 @@ impl EngineApi {
     pub fn setup_engine_namespace_with_sinks(
         &self,
         lua: &Lua,
-        set_transforms_cb: Rc<dyn Fn(&[f64])>,
-        set_transforms_f32_cb: Option<Rc<dyn Fn(Rc<RefCell<Vec<f32>>>, usize, usize)>>,
-        submit_sprites_cb: Rc<dyn Fn(&[SpriteV2])>,
-        submit_sprites_typed_cb: Option<Rc<dyn Fn(Rc<RefCell<Vec<SpriteData>>>, usize, usize)>>,
+        set_transforms_cb: SetTransformsCb,
+        set_transforms_f32_cb: SetTransformsF32Cb,
+        submit_sprites_cb: SubmitSpritesCb,
+        submit_sprites_typed_cb: SubmitSpritesTypedCb,
     ) -> Result<()> {
         let globals = lua.globals();
 
@@ -1135,25 +1179,15 @@ impl EngineApi {
     pub fn setup_engine_namespace_with_sinks_and_metrics(
         &self,
         lua: &Lua,
-        set_transforms_cb: Rc<dyn Fn(&[f64])>,
-        set_transforms_f32_cb: Option<Rc<dyn Fn(Rc<RefCell<Vec<f32>>>, usize, usize)>>,
-        submit_sprites_cb: Rc<dyn Fn(&[SpriteV2])>,
-        submit_sprites_typed_cb: Option<Rc<dyn Fn(Rc<RefCell<Vec<SpriteData>>>, usize, usize)>>,
-        metrics_provider: Rc<dyn Fn() -> (f64, u32, u32)>,
-        load_texture_cb: Rc<dyn Fn(String, u32)>,
-        input_provider: Rc<dyn Fn() -> InputSnapshot>,
-        window_size_provider: Rc<dyn Fn() -> (u32, u32)>,
-        hud_printf_cb: Rc<dyn Fn(String)>,
-        set_clear_color_cb: Rc<dyn Fn(f32, f32, f32, f32)>,
-        set_render_mode_cb: Rc<dyn Fn(&'static str)>,
+        callbacks: EngineCallbacks,
     ) -> Result<()> {
         // First install base + sinks
         self.setup_engine_namespace_with_sinks(
             lua,
-            set_transforms_cb,
-            set_transforms_f32_cb,
-            submit_sprites_cb,
-            submit_sprites_typed_cb,
+            callbacks.set_transforms_cb,
+            callbacks.set_transforms_f32_cb,
+            callbacks.submit_sprites_cb,
+            callbacks.submit_sprites_typed_cb,
         )?;
 
         // Override get_metrics
@@ -1162,7 +1196,7 @@ impl EngineApi {
             .get("engine")
             .map_err(|e| anyhow::Error::msg(format!("Failed to get engine table: {}", e)))?;
 
-        let provider = metrics_provider.clone();
+        let provider = callbacks.metrics_provider.clone();
         let metrics_func = lua
             .create_function(move |lua, ()| {
                 let (cpu_ms, sprites, ffi) = provider();
@@ -1179,7 +1213,7 @@ impl EngineApi {
             .map_err(|e| anyhow::Error::msg(format!("Failed to set get_metrics: {}", e)))?;
 
         // Override get_input using provider
-        let input_p = input_provider.clone();
+        let input_p = callbacks.input_provider.clone();
         let input_func = lua
             .create_function(move |_, ()| Ok(input_p()))
             .map_err(|e| anyhow::Error::msg(format!("Failed to override get_input: {}", e)))?;
@@ -1188,7 +1222,7 @@ impl EngineApi {
             .map_err(|e| anyhow::Error::msg(format!("Failed to set get_input: {}", e)))?;
 
         // Add window_size() -> (w, h)
-        let ws_p = window_size_provider.clone();
+        let ws_p = callbacks.window_size_provider.clone();
         let ws_func = lua
             .create_function(move |_, ()| {
                 let (w, h) = ws_p();
@@ -1200,7 +1234,7 @@ impl EngineApi {
             .map_err(|e| anyhow::Error::msg(format!("Failed to set window_size: {}", e)))?;
 
         // HUD printf hook: engine.hud_printf(msg) (rate-limited 30 msgs/sec)
-        let hud_cb = hud_printf_cb.clone();
+        let hud_cb = callbacks.hud_printf_cb.clone();
         let hud_rl = self.hud_rl.clone();
         let fixed_time_for_hud = self.fixed_time.clone();
         let hud_fn = lua
@@ -1223,7 +1257,7 @@ impl EngineApi {
             .map_err(|e| anyhow::Error::msg(format!("Failed to set hud_printf: {}", e)))?;
 
         // Add set_clear_color(r, g, b, a?) -> sets background; alpha optional (default 1)
-        let scc = set_clear_color_cb.clone();
+        let scc = callbacks.set_clear_color_cb.clone();
         let set_clear_color_fn = lua
             .create_function(move |lua, args: mlua::Variadic<mlua::Value>| {
                 if args.len() < 3 {
@@ -1248,7 +1282,7 @@ impl EngineApi {
             .map_err(|e| anyhow::Error::msg(format!("Failed to set set_clear_color: {}", e)))?;
 
         // Add set_render_resolution("retro"|"hd")
-        let srm = set_render_mode_cb.clone();
+        let srm = callbacks.set_render_mode_cb.clone();
         let set_render_fn = lua
             .create_function(move |_, mode: String| {
                 let m = if mode.eq_ignore_ascii_case("retro") {
@@ -1275,7 +1309,7 @@ impl EngineApi {
 
         // Override load_texture to notify host and return a handle immediately
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);
-        let lt_cb = load_texture_cb.clone();
+        let lt_cb = callbacks.load_texture_cb.clone();
         let load_func = lua
             .create_function(move |_, path: String| {
                 let mut id_ref = next_texture_id.borrow_mut();
@@ -1304,7 +1338,7 @@ impl EngineApi {
             height: Option<f32>,
         }
         let next_tex_for_atlas = std::cell::RefCell::new(self.next_texture_id + 10_000);
-        let lt_cb2 = load_texture_cb.clone();
+        let lt_cb2 = callbacks.load_texture_cb.clone();
         let atlas_func = lua
             .create_function(move |lua, (png_path, json_path): (String, String)| {
                 let mut id_ref = next_tex_for_atlas.borrow_mut();
@@ -1499,20 +1533,8 @@ impl UserData for FrameBuilder {
             "sprite_tex",
             |lua,
              this,
-             (i, id_ud, tex_ud, u0, v0, u1, v1, r, g, b, a, z_opt): (
-                usize,
-                AnyUserData,
-                AnyUserData,
-                f32,
-                f32,
-                f32,
-                f32,
-                f32,
-                f32,
-                f32,
-                f32,
-                Option<f32>,
-            )| {
+             params: SpriteTexParams| {
+                let (i, id_ud, tex_ud, u0, v0, u1, v1, r, g, b, a, z_opt) = params;
                 let s_ud: AnyUserData = lua.registry_value(&this.s_key)?;
                 let sb = s_ud.borrow::<SpriteBuffer>()?;
                 let idx = i

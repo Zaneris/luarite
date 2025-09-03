@@ -7,6 +7,9 @@ use engine_core::{
 use std::rc::Rc;
 use std::cell::RefCell;
 
+// Type alias for complex type to satisfy clippy
+type ClearColor = (f32, f32, f32, f32);
+
 /// Wrapper around framebuffer data that handles coordinate system differences
 ///
 /// The engine uses a coordinate system where y=0 is at the bottom (matching the orthographic projection),
@@ -76,7 +79,7 @@ fn pixel_matches(actual: [u8; 4], expected: [u8; 4], tolerance: u8) -> bool {
 struct E2ETestHarness {
     transforms_capture: Rc<RefCell<Vec<f64>>>,
     sprites_capture: Rc<RefCell<Vec<engine_scripting::api::SpriteV2>>>,
-    clear_color_capture: Rc<RefCell<Option<(f32, f32, f32, f32)>>>,
+    clear_color_capture: Rc<RefCell<Option<ClearColor>>>,
     render_mode_capture: Rc<RefCell<Option<String>>>,
 }
 
@@ -119,7 +122,7 @@ impl E2ETestHarness {
         // Dummy callbacks for other engine functions
         let metrics_provider = Rc::new(|| (0.016, 60, 1));
         let load_texture_cb = Rc::new(|_path: String, _id: u32| {});
-        let input_provider = Rc::new(|| InputSnapshot::default());
+        let input_provider = Rc::new(InputSnapshot::default);
         let window_size_provider = Rc::new(|| (320u32, 180u32));
         let hud_printf_cb = Rc::new(|_msg: String| {});
         let set_clear_color_cb = Rc::new(move |r: f32, g: f32, b: f32, a: f32| {
@@ -131,18 +134,20 @@ impl E2ETestHarness {
 
         // Setup engine API with callbacks
         api.setup_engine_namespace_with_sinks_and_metrics(
-            &sandbox.lua(),
-            set_transforms_cb,
-            None,
-            submit_sprites_cb,
-            None,
-            metrics_provider,
-            load_texture_cb,
-            input_provider,
-            window_size_provider,
-            hud_printf_cb,
-            set_clear_color_cb,
-            set_render_mode_cb,
+            sandbox.lua(),
+            engine_scripting::api::EngineCallbacks {
+                set_transforms_cb,
+                set_transforms_f32_cb: None,
+                submit_sprites_cb,
+                submit_sprites_typed_cb: None,
+                metrics_provider,
+                load_texture_cb,
+                input_provider,
+                window_size_provider,
+                hud_printf_cb,
+                set_clear_color_cb,
+                set_render_mode_cb,
+            },
         )?;
 
         // Load and execute script
@@ -205,15 +210,6 @@ impl E2ETestHarness {
         Ok(framebuffer_data)
     }
 
-    /// Get captured transforms for additional verification
-    fn get_transforms(&self) -> Vec<f64> {
-        self.transforms_capture.borrow().clone()
-    }
-
-    /// Get captured sprites for additional verification
-    fn get_sprites(&self) -> Vec<engine_scripting::api::SpriteV2> {
-        self.sprites_capture.borrow().clone()
-    }
 }
 
 #[tokio::test]

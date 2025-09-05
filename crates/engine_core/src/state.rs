@@ -359,6 +359,13 @@ pub enum VirtualResolution {
 pub struct Layer {
     pub name: String,
     pub order: i32,
+    pub parallax_x: f32,
+    pub parallax_y: f32,
+    pub screen_space: bool,
+    pub visible: bool,
+    pub shake_factor: f32,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
 }
 
 #[derive(Debug, Default)]
@@ -381,7 +388,17 @@ impl Layers {
             return id;
         }
         let id = self.vec.len() as u32;
-        self.vec.push(Layer { name: name.clone(), order });
+        self.vec.push(Layer {
+            name: name.clone(),
+            order,
+            parallax_x: 1.0,
+            parallax_y: 1.0,
+            screen_space: false,
+            visible: true,
+            shake_factor: 1.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
         self.by_name.insert(name, id);
         id
     }
@@ -391,6 +408,11 @@ impl Layers {
     }
     pub fn order_of(&self, id: u32) -> i32 {
         self.vec.get(id as usize).map(|l| l.order).unwrap_or(0)
+    }
+    pub fn get(&self, id: u32) -> Option<&Layer> { self.vec.get(id as usize) }
+    pub fn by_name_mut(&mut self, name: &str) -> Option<&mut Layer> {
+        let id = *self.by_name.get(name)? as usize;
+        self.vec.get_mut(id)
     }
     pub fn clone_from(&mut self, other: &Layers) {
         self.by_name = other.by_name.clone();

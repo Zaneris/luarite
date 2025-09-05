@@ -23,6 +23,8 @@ type CameraSetCb = Rc<dyn Fn(f32, f32)>;
 type CameraGetCb = Rc<dyn Fn() -> (f32, f32)>;
 type LayerDefineCb = Rc<dyn Fn(String, i32) -> u32>;
 type LayerResolveCb = Rc<dyn Fn(String) -> u32>;
+type LayerSetCb = Rc<dyn Fn(String, Option<i32>, Option<(f32, f32)>, Option<bool>, Option<bool>, Option<f32>)>;
+type LayerScrollCb = Rc<dyn Fn(String, f32, f32)>;
 
 /// Complex tuple type for sprite texture parameters
 type SpriteTexParams = (
@@ -58,6 +60,8 @@ pub struct EngineCallbacks {
     pub camera_get_cb: CameraGetCb,
     pub layer_define_cb: LayerDefineCb,
     pub layer_resolve_cb: LayerResolveCb,
+    pub layer_set_cb: LayerSetCb,
+    pub layer_scroll_cb: LayerScrollCb,
 }
 
 /// Current engine API version
@@ -1701,6 +1705,47 @@ impl EngineApi {
             engine_table
                 .set("layer_define", layer_define)
                 .map_err(|e| anyhow::Error::msg(format!("Failed to set layer_define: {}", e)))?;
+        }
+
+        // Layers: layer_set(name, opts)
+        {
+            let lset = callbacks.layer_set_cb.clone();
+            let layer_set = lua
+                .create_function(move |_, (name, opts): (String, mlua::Table)| {
+                    // Parse optional fields
+                    let order: Option<i32> = match opts.get::<mlua::Value>("order") { Ok(mlua::Value::Integer(i)) => Some(i as i32), Ok(mlua::Value::Number(n)) => Some(n as i32), _ => None };
+                    let parallax: Option<(f32, f32)> = match opts.get::<mlua::Value>("parallax") {
+                        Ok(mlua::Value::Table(t)) => {
+                            let x = t.raw_get::<f32>(1).or_else(|_| t.get::<f32>("x")).unwrap_or(1.0);
+                            let y = t.raw_get::<f32>(2).or_else(|_| t.get::<f32>("y")).unwrap_or(1.0);
+                            Some((x, y))
+                        }
+                        _ => None,
+                    };
+                    let screen_space: Option<bool> = match opts.get::<mlua::Value>("screen_space") { Ok(mlua::Value::Boolean(b)) => Some(b), _ => None };
+                    let visible: Option<bool> = match opts.get::<mlua::Value>("visible") { Ok(mlua::Value::Boolean(b)) => Some(b), _ => None };
+                    let shake: Option<f32> = match opts.get::<mlua::Value>("shake") { Ok(mlua::Value::Number(n)) => Some(n as f32), _ => None };
+                    lset(name, order, parallax, screen_space, visible, shake);
+                    Ok(())
+                })
+                .map_err(|e| anyhow::Error::msg(format!("Failed to create layer_set: {}", e)))?;
+            engine_table
+                .set("layer_set", layer_set)
+                .map_err(|e| anyhow::Error::msg(format!("Failed to set layer_set: {}", e)))?;
+        }
+
+        // Layers: layer_scroll(name, dx, dy)
+        {
+            let lscroll = callbacks.layer_scroll_cb.clone();
+            let layer_scroll = lua
+                .create_function(move |_, (name, dx, dy): (String, f32, f32)| {
+                    lscroll(name, dx, dy);
+                    Ok(())
+                })
+                .map_err(|e| anyhow::Error::msg(format!("Failed to create layer_scroll: {}", e)))?;
+            engine_table
+                .set("layer_scroll", layer_scroll)
+                .map_err(|e| anyhow::Error::msg(format!("Failed to set layer_scroll: {}", e)))?;
         }
 
         // Provide resolver to sugar path

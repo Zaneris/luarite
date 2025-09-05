@@ -308,6 +308,31 @@ fn main() -> Result<()> {
                         ex.layers.resolve_or_create(&name)
                     })
                 },
+                layer_set_cb: {
+                    let ex_layers = exchange.clone();
+                    Rc::new(move |name: String, order: Option<i32>, parallax: Option<(f32,f32)>, screen_space: Option<bool>, visible: Option<bool>, shake: Option<f32>| {
+                        let mut ex = ex_layers.borrow_mut();
+                        ex.layers.resolve_or_create(&name);
+                        if let Some(l) = ex.layers.by_name_mut(&name) {
+                            if let Some(o) = order { l.order = o; }
+                            if let Some((px,py)) = parallax { l.parallax_x = px; l.parallax_y = py; }
+                            if let Some(ss) = screen_space { l.screen_space = ss; }
+                            if let Some(v) = visible { l.visible = v; }
+                            if let Some(s) = shake { l.shake_factor = s; }
+                        }
+                    })
+                },
+                layer_scroll_cb: {
+                    let ex_layers = exchange.clone();
+                    Rc::new(move |name: String, dx: f32, dy: f32| {
+                        let mut ex = ex_layers.borrow_mut();
+                        ex.layers.resolve_or_create(&name);
+                        if let Some(l) = ex.layers.by_name_mut(&name) {
+                            l.scroll_x += dx;
+                            l.scroll_y += dy;
+                        }
+                    })
+                },
             },
         )?;
     }

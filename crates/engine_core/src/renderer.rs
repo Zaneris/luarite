@@ -1146,13 +1146,34 @@ impl SpriteRenderer {
                     current_batch_start = self.sprite_indices.len() as u32;
                 }
 
+                // Compute per-layer camera offset and optional retro snapping
+                let (px, py) = {
+                    let l = layers.get(sd.layer_id);
+                    // Defaults if layer missing
+                    let (parx, pary, ss, sx, sy) = if let Some(layer) = l {
+                        (layer.parallax_x, layer.parallax_y, layer.screen_space, layer.scroll_x, layer.scroll_y)
+                    } else {
+                        (1.0, 1.0, false, 0.0, 0.0)
+                    };
+                    let (ex, ey) = if ss {
+                        (0.0, 0.0)
+                    } else {
+                        (cam_x * parx + sx, cam_y * pary + sy)
+                    };
+                    let mut px = transform.position.x - ex;
+                    let mut py = transform.position.y - ey;
+                    if matches!(self.virtual_mode, crate::state::VirtualResolution::Retro320x180) {
+                        // Round to integer pixels on the virtual canvas to avoid shimmer
+                        px = px.round();
+                        py = py.round();
+                    }
+                    (px, py)
+                };
+
                 let sprite_instance = SpriteInstance {
                     entity_id: sd.entity_id,
                     texture_id: sd.texture_id,
-                    position: glam::Vec2::new(
-                        transform.position.x - cam_x,
-                        transform.position.y - cam_y,
-                    ),
+                    position: glam::Vec2::new(px, py),
                     rotation: transform.rotation,
                     size: transform.size, // Use direct pixel size
                     uv_rect: Vec4::new(sd.uv[0], sd.uv[1], sd.uv[2], sd.uv[3]),

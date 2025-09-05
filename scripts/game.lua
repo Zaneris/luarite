@@ -56,6 +56,10 @@ function on_start()
   -- Define simple layers: background then main
   engine.layer_define("bg",   { order = -100 })
   engine.layer_define("main", { order = 0 })
+  -- Give background a gentle parallax so it moves slower than the camera
+  engine.layer_set("bg", { parallax = {0.5, 0.5} })
+  -- One-time hint for controls
+  engine.hud_printf("Camera: A/D=Left/Right, Q/E=Up/Down | BG parallax=0.5")
   background = engine.create_entity()
   paddle_l = engine.create_entity()
   paddle_r = engine.create_entity()
@@ -99,6 +103,8 @@ function on_update(dt)
   cam_x = cam_x + (cdx * 80.0) * dt
   cam_y = cam_y + (cdy * 80.0) * dt
   engine.camera_set{ x = cam_x, y = cam_y }
+  -- Slowly scroll background for subtle motion
+  -- engine.layer_scroll("bg", 8.0 * dt, 0.0)
 
   -- Draw using sugar API
   engine.begin_frame()

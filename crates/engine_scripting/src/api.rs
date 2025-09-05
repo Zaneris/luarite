@@ -19,6 +19,12 @@ type WindowSizeProviderCb = Rc<dyn Fn() -> (u32, u32)>;
 type HudPrintfCb = Rc<dyn Fn(String)>;
 type SetClearColorCb = Rc<dyn Fn(f32, f32, f32, f32)>;
 type SetRenderModeCb = Rc<dyn Fn(&'static str)>;
+type CameraSetCb = Rc<dyn Fn(f32, f32)>;
+type CameraGetCb = Rc<dyn Fn() -> (f32, f32)>;
+type LayerDefineCb = Rc<dyn Fn(String, i32) -> u32>;
+type LayerResolveCb = Rc<dyn Fn(String) -> u32>;
+type LayerSetCb = Rc<dyn Fn(String, Option<i32>, Option<(f32, f32)>, Option<bool>, Option<bool>, Option<f32>)>;
+type LayerScrollCb = Rc<dyn Fn(String, f32, f32)>;
 
 /// Complex tuple type for sprite texture parameters
 type SpriteTexParams = (
@@ -49,6 +55,13 @@ pub struct EngineCallbacks {
     pub hud_printf_cb: HudPrintfCb,
     pub set_clear_color_cb: SetClearColorCb,
     pub set_render_mode_cb: SetRenderModeCb,
+    // New: camera and layers (minimal v0)
+    pub camera_set_cb: CameraSetCb,
+    pub camera_get_cb: CameraGetCb,
+    pub layer_define_cb: LayerDefineCb,
+    pub layer_resolve_cb: LayerResolveCb,
+    pub layer_set_cb: LayerSetCb,
+    pub layer_scroll_cb: LayerScrollCb,
 }
 
 /// Current engine API version
@@ -404,6 +417,8 @@ pub struct EngineApi {
     // Internal sugar API buffers (growable)
     sugar_transforms: Rc<RefCell<TransformBuffer>>,
     sugar_sprites: Rc<RefCell<SpriteBuffer>>,
+    // Optional resolver for layer names used by sugar sprite path
+    layer_resolve: Rc<RefCell<Option<LayerResolveCb>>>,
 }
 
 impl EngineApi {
@@ -420,6 +435,7 @@ impl EngineApi {
             capabilities: EngineCapabilities::default(),
             sugar_transforms: Rc::new(RefCell::new(TransformBuffer::new(128))), // Start with reasonable capacity
             sugar_sprites: Rc::new(RefCell::new(SpriteBuffer::new(128))),
+            layer_resolve: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -583,6 +599,7 @@ impl EngineApi {
 
         let sugar_transforms_sprite = self.sugar_transforms.clone();
         let sugar_sprites_sprite = self.sugar_sprites.clone();
+        let layer_resolve_cell = self.layer_resolve.clone();
         let sprite_sugar_func = lua
             .create_function(move |_lua, sprite_def: mlua::Table| {
                 // Extract required fields
@@ -686,6 +703,7 @@ impl EngineApi {
                             uv: [0.0; 4],
                             color: [0.0; 4],
                             z: 0.0,
+                            layer_id: 0,
                         },
                     );
                     *sprites.cap.borrow_mut() = new_cap;
@@ -704,12 +722,21 @@ impl EngineApi {
 
                 // Add sprite directly to buffer
                 let mut rows = sprites.rows.borrow_mut();
+                // Determine optional layer id via resolver
+                let mut layer_id: u32 = 0;
+                if let Some(cb) = &*layer_resolve_cell.borrow() {
+                    if let Ok(name) = sprite_def.get::<String>("layer") {
+                        layer_id = cb(name);
+                    }
+                }
+
                 rows[new_index - 1] = SpriteData {
                     entity_id,
                     texture_id,
                     uv: [u0, v0, u1, v1],
                     color: [r, g, b, a],
                     z,
+                    layer_id,
                 };
                 *sprites.len.borrow_mut() = new_index;
 
@@ -1099,6 +1126,7 @@ impl SpriteBuffer {
                 uv: [0.0; 4],
                 color: [0.0; 4],
                 z: 0.0,
+                layer_id: 0,
             },
         );
         Self {
@@ -1145,6 +1173,7 @@ impl UserData for SpriteBuffer {
                     uv: [u0, v0, u1, v1],
                     color: [r, g, b, a],
                     z,
+                    layer_id: 0,
                 };
                 let mut l = this.len.borrow_mut();
                 if i > *l {
@@ -1254,6 +1283,7 @@ impl UserData for SpriteBuffer {
                     uv: [0.0; 4],
                     color: [0.0; 4],
                     z: 0.0,
+                    layer_id: 0,
                 },
             );
             *this.cap.borrow_mut() = new_cap;
@@ -1633,6 +1663,94 @@ impl EngineApi {
             .set("set_render_mode", set_render_fn)
             .map_err(|e| anyhow::Error::msg(format!("Failed to set set_render_mode: {}", e)))?;
 
+        // Camera minimal API
+        {
+            let cset = callbacks.camera_set_cb.clone();
+            let cget = callbacks.camera_get_cb.clone();
+            let camera_set = lua
+                .create_function(move |_, tbl: mlua::Table| {
+                    let x: f32 = tbl.get("x").unwrap_or(0.0);
+                    let y: f32 = tbl.get("y").unwrap_or(0.0);
+                    cset(x, y);
+                    Ok(())
+                })
+                .map_err(|e| anyhow::Error::msg(format!("Failed to create camera_set: {}", e)))?;
+            let camera_get = lua
+                .create_function(move |lua, ()| {
+                    let (x, y) = cget();
+                    let t = lua.create_table()?;
+                    t.set("x", x)?;
+                    t.set("y", y)?;
+                    Ok(t)
+                })
+                .map_err(|e| anyhow::Error::msg(format!("Failed to create camera_get: {}", e)))?;
+            engine_table
+                .set("camera_set", camera_set)
+                .map_err(|e| anyhow::Error::msg(format!("Failed to set camera_set: {}", e)))?;
+            engine_table
+                .set("camera_get", camera_get)
+                .map_err(|e| anyhow::Error::msg(format!("Failed to set camera_get: {}", e)))?;
+        }
+
+        // Layers minimal API (define/update)
+        {
+            let ldef = callbacks.layer_define_cb.clone();
+            let layer_define = lua
+                .create_function(move |_, (name, opts): (String, mlua::Table)| {
+                    let order: i32 = opts.get("order").unwrap_or(0);
+                    let id = ldef(name, order);
+                    Ok(id as i64)
+                })
+                .map_err(|e| anyhow::Error::msg(format!("Failed to create layer_define: {}", e)))?;
+            engine_table
+                .set("layer_define", layer_define)
+                .map_err(|e| anyhow::Error::msg(format!("Failed to set layer_define: {}", e)))?;
+        }
+
+        // Layers: layer_set(name, opts)
+        {
+            let lset = callbacks.layer_set_cb.clone();
+            let layer_set = lua
+                .create_function(move |_, (name, opts): (String, mlua::Table)| {
+                    // Parse optional fields
+                    let order: Option<i32> = match opts.get::<mlua::Value>("order") { Ok(mlua::Value::Integer(i)) => Some(i as i32), Ok(mlua::Value::Number(n)) => Some(n as i32), _ => None };
+                    let parallax: Option<(f32, f32)> = match opts.get::<mlua::Value>("parallax") {
+                        Ok(mlua::Value::Table(t)) => {
+                            let x = t.raw_get::<f32>(1).or_else(|_| t.get::<f32>("x")).unwrap_or(1.0);
+                            let y = t.raw_get::<f32>(2).or_else(|_| t.get::<f32>("y")).unwrap_or(1.0);
+                            Some((x, y))
+                        }
+                        _ => None,
+                    };
+                    let screen_space: Option<bool> = match opts.get::<mlua::Value>("screen_space") { Ok(mlua::Value::Boolean(b)) => Some(b), _ => None };
+                    let visible: Option<bool> = match opts.get::<mlua::Value>("visible") { Ok(mlua::Value::Boolean(b)) => Some(b), _ => None };
+                    let shake: Option<f32> = match opts.get::<mlua::Value>("shake") { Ok(mlua::Value::Number(n)) => Some(n as f32), _ => None };
+                    lset(name, order, parallax, screen_space, visible, shake);
+                    Ok(())
+                })
+                .map_err(|e| anyhow::Error::msg(format!("Failed to create layer_set: {}", e)))?;
+            engine_table
+                .set("layer_set", layer_set)
+                .map_err(|e| anyhow::Error::msg(format!("Failed to set layer_set: {}", e)))?;
+        }
+
+        // Layers: layer_scroll(name, dx, dy)
+        {
+            let lscroll = callbacks.layer_scroll_cb.clone();
+            let layer_scroll = lua
+                .create_function(move |_, (name, dx, dy): (String, f32, f32)| {
+                    lscroll(name, dx, dy);
+                    Ok(())
+                })
+                .map_err(|e| anyhow::Error::msg(format!("Failed to create layer_scroll: {}", e)))?;
+            engine_table
+                .set("layer_scroll", layer_scroll)
+                .map_err(|e| anyhow::Error::msg(format!("Failed to set layer_scroll: {}", e)))?;
+        }
+
+        // Provide resolver to sugar path
+        *self.layer_resolve.borrow_mut() = Some(callbacks.layer_resolve_cb.clone());
+
         // Override load_texture to notify host and return a handle immediately
         let next_texture_id = std::cell::RefCell::new(self.next_texture_id);
         let lt_cb = callbacks.load_texture_cb.clone();
@@ -1879,6 +1997,7 @@ impl UserData for FrameBuilder {
                 uv: [u0, v0, u1, v1],
                 color: [r, g, b, a],
                 z: z_opt.unwrap_or(0.0),
+                layer_id: 0,
             };
             let mut l = sb.len.borrow_mut();
             if i > *l {
@@ -1959,13 +2078,14 @@ impl UserData for FrameBuilder {
                     mlua::Error::RuntimeError(format!("unknown atlas name: {}", name))
                 })?;
                 let mut rows = sb.rows.borrow_mut();
-                rows[idx] = SpriteData {
-                    entity_id,
-                    texture_id: atlas.texture.0,
-                    uv: [uv[0], uv[1], uv[2], uv[3]],
-                    color: [r, g, b, a],
-                    z: z_opt.unwrap_or(0.0),
-                };
+            rows[idx] = SpriteData {
+                entity_id,
+                texture_id: atlas.texture.0,
+                uv: [uv[0], uv[1], uv[2], uv[3]],
+                color: [r, g, b, a],
+                z: z_opt.unwrap_or(0.0),
+                layer_id: 0,
+            };
                 let mut l = sb.len.borrow_mut();
                 if i > *l {
                     *l = i;

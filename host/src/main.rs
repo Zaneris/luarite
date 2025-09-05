@@ -59,6 +59,11 @@ fn main() -> Result<()> {
         drained_sprites_this_frame: bool,
         clear_color: Option<[f32; 4]>,
         render_mode: Option<engine_core::state::VirtualResolution>,
+        // Camera (v0)
+        camera_x: f32,
+        camera_y: f32,
+        // Layers registry mirror (applied to engine_state each frame)
+        layers: engine_core::state::Layers,
     }
     impl Default for ScriptExchange {
         fn default() -> Self {
@@ -75,6 +80,9 @@ fn main() -> Result<()> {
                 drained_sprites_this_frame: false,
                 clear_color: None,
                 render_mode: None,
+                camera_x: 0.0,
+                camera_y: 0.0,
+                layers: engine_core::state::Layers::with_defaults(),
             }
         }
     }
@@ -270,6 +278,61 @@ fn main() -> Result<()> {
                         ex.render_mode = Some(resolution);
                     })
                 },
+                // New camera/layers callbacks
+                camera_set_cb: {
+                    let ex_cam = exchange.clone();
+                    Rc::new(move |x: f32, y: f32| {
+                        let mut ex = ex_cam.borrow_mut();
+                        ex.camera_x = x;
+                        ex.camera_y = y;
+                    })
+                },
+                camera_get_cb: {
+                    let ex_cam = exchange.clone();
+                    Rc::new(move || {
+                        let ex = ex_cam.borrow();
+                        (ex.camera_x, ex.camera_y)
+                    })
+                },
+                layer_define_cb: {
+                    let ex_layers = exchange.clone();
+                    Rc::new(move |name: String, order: i32| {
+                        let mut ex = ex_layers.borrow_mut();
+                        ex.layers.define_or_update(name, order)
+                    })
+                },
+                layer_resolve_cb: {
+                    let ex_layers = exchange.clone();
+                    Rc::new(move |name: String| {
+                        let mut ex = ex_layers.borrow_mut();
+                        ex.layers.resolve_or_create(&name)
+                    })
+                },
+                layer_set_cb: {
+                    let ex_layers = exchange.clone();
+                    Rc::new(move |name: String, order: Option<i32>, parallax: Option<(f32,f32)>, screen_space: Option<bool>, visible: Option<bool>, shake: Option<f32>| {
+                        let mut ex = ex_layers.borrow_mut();
+                        ex.layers.resolve_or_create(&name);
+                        if let Some(l) = ex.layers.by_name_mut(&name) {
+                            if let Some(o) = order { l.order = o; }
+                            if let Some((px,py)) = parallax { l.parallax_x = px; l.parallax_y = py; }
+                            if let Some(ss) = screen_space { l.screen_space = ss; }
+                            if let Some(v) = visible { l.visible = v; }
+                            if let Some(s) = shake { l.shake_factor = s; }
+                        }
+                    })
+                },
+                layer_scroll_cb: {
+                    let ex_layers = exchange.clone();
+                    Rc::new(move |name: String, dx: f32, dy: f32| {
+                        let mut ex = ex_layers.borrow_mut();
+                        ex.layers.resolve_or_create(&name);
+                        if let Some(l) = ex.layers.by_name_mut(&name) {
+                            l.scroll_x += dx;
+                            l.scroll_y += dy;
+                        }
+                    })
+                },
             },
         )?;
     }
@@ -393,6 +456,9 @@ fn main() -> Result<()> {
                     }
                     ex.transforms_dirty = false;
                 }
+                // Apply camera + layers to engine state for this frame
+                state.set_camera_xy(ex.camera_x, ex.camera_y);
+                state.layers_mut().clone_from(&ex.layers);
                 // Prefer zero-copy typed sprites swap if present
                 if let Some((rcvec, rows, _cap)) = ex.typed_sprites.take() {
                     if !ex.drained_sprites_this_frame {
@@ -414,6 +480,7 @@ fn main() -> Result<()> {
                             uv: [s.u0, s.v0, s.u1, s.v1],
                             color: [s.r, s.g, s.b, s.a],
                             z: s.z,
+                            layer_id: 0,
                         });
                     }
                     if let Err(e) = state.append_sprites(&mut sprites_scratch) {

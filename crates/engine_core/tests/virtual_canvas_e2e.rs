@@ -88,6 +88,11 @@ impl E2ETestHarness {
         // We need to capture the final state submitted by the sugar API
         let transforms_capture = Rc::new(RefCell::new(Vec::new()));
         let sprites_capture = Rc::new(RefCell::new(Vec::new()));
+        // Typed sprite capture (preserves layer_id)
+        let typed_sprites_capture = Rc::new(RefCell::new(Vec::<engine_core::state::SpriteData>::new()));
+        // Camera and layers capture
+        let camera_capture = Rc::new(RefCell::new((0.0f32, 0.0f32)));
+        let layers_capture = Rc::new(RefCell::new(engine_core::state::Layers::with_defaults()));
         let clear_color_capture = Rc::new(RefCell::new(None));
         let render_mode_capture = Rc::new(RefCell::new(None));
 
@@ -116,14 +121,41 @@ impl E2ETestHarness {
                     *render_mode_shared.borrow_mut() = Some(mode.to_string());
                 })
             },
-            // These are not used by the sugar API in the same way, so they can be dummy.
+            // Enable typed path to preserve layer_id from sugar
             set_transforms_f32_cb: None,
-            submit_sprites_typed_cb: None,
+            submit_sprites_typed_cb: {
+                let cap = typed_sprites_capture.clone();
+                Some(Rc::new(move |rcvec, rows, _cap| {
+                    let v = rcvec.borrow();
+                    let take = rows.min(v.len());
+                    cap.borrow_mut().clear();
+                    cap.borrow_mut().extend_from_slice(&v[..take]);
+                }))
+            },
             metrics_provider: Rc::new(|| (0.016, 60, 1)),
             load_texture_cb: Rc::new(|_path, _id| {}),
             input_provider: Rc::new(Default::default),
             window_size_provider: Rc::new(|| (320, 180)),
             hud_printf_cb: Rc::new(|_msg| {}),
+            // Camera/layers callbacks used by scripts
+            camera_set_cb: {
+                let cc = camera_capture.clone();
+                Rc::new(move |x: f32, y: f32| {
+                    *cc.borrow_mut() = (x, y);
+                })
+            },
+            camera_get_cb: {
+                let cc = camera_capture.clone();
+                Rc::new(move || *cc.borrow())
+            },
+            layer_define_cb: {
+                let lc = layers_capture.clone();
+                Rc::new(move |name: String, order: i32| lc.borrow_mut().define_or_update(name, order))
+            },
+            layer_resolve_cb: {
+                let lc = layers_capture.clone();
+                Rc::new(move |name: String| lc.borrow_mut().resolve_or_create(&name))
+            },
         };
 
         api.setup_engine_namespace_with_sinks_and_metrics(sandbox.lua(), callbacks)?;
@@ -152,16 +184,28 @@ impl E2ETestHarness {
             engine_state.set_transforms(transforms)?;
         }
 
-        let sprites = sprites_capture.borrow();
-        if !sprites.is_empty() {
-            let sprite_data: Vec<SpriteData> = sprites.iter().map(|s| SpriteData {
-                entity_id: s.entity_id,
-                texture_id: s.texture_id,
-                uv: [s.u0, s.v0, s.u1, s.v1],
-                color: [s.r, s.g, s.b, s.a],
-                z: s.z,
-            }).collect();
-            engine_state.submit_sprites(sprite_data)?;
+        // Apply camera and layers from script
+        let (cx, cy) = *camera_capture.borrow();
+        engine_state.set_camera_xy(cx, cy);
+        engine_state.layers_mut().clone_from(&layers_capture.borrow());
+
+        // Prefer typed sprites (preserves layer_id); fallback to parsed table
+        let typed_rows = typed_sprites_capture.borrow();
+        if !typed_rows.is_empty() {
+            engine_state.set_sprites_from_slice(&typed_rows)?;
+        } else {
+            let sprites = sprites_capture.borrow();
+            if !sprites.is_empty() {
+                let sprite_data: Vec<SpriteData> = sprites.iter().map(|s| SpriteData {
+                    entity_id: s.entity_id,
+                    texture_id: s.texture_id,
+                    uv: [s.u0, s.v0, s.u1, s.v1],
+                    color: [s.r, s.g, s.b, s.a],
+                    z: s.z,
+                    layer_id: 0,
+                }).collect();
+                engine_state.submit_sprites(sprite_data)?;
+            }
         }
 
         let textures = self.textures.borrow();
@@ -414,6 +458,130 @@ async fn test_sprite_alpha_blending() -> Result<()> {
         blended_pixel
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_layer_ordering_basic() -> Result<()> {
+    // Headless renderer and state
+    let mut renderer = SpriteRenderer::new_headless(640, 480).await?;
+    let mut state = EngineState::new();
+    state.set_virtual_resolution(VirtualResolution::Retro320x180);
+    state.set_clear_color(0.0, 0.0, 0.0, 1.0);
+
+    // Create two solid textures
+    let red = create_test_texture(16, 16, [255, 0, 0, 255]);
+    let blue = create_test_texture(16, 16, [0, 0, 255, 255]);
+    state.insert_texture_with_id(1, "red", red);
+    state.insert_texture_with_id(2, "blue", blue);
+
+    // Define layers: bg (-100), fg (100)
+    state.layers_mut().define_or_update("bg".to_string(), -100);
+    state.layers_mut().define_or_update("fg".to_string(), 100);
+
+    // Two entities at center, same z; different layers
+    let center_x = 160.0f32;
+    let center_y = 90.0f32;
+    let mut tf: Vec<f32> = Vec::new();
+    // id=1 (blue, background)
+    tf.extend_from_slice(&[1.0, center_x, center_y, 0.0, 32.0, 32.0]);
+    // id=2 (red, foreground)
+    tf.extend_from_slice(&[2.0, center_x, center_y, 0.0, 32.0, 32.0]);
+    state.set_transforms_from_f32_slice(&tf)?;
+
+    // Resolve ids for defined layers
+    let bg_id = state.layers_mut().resolve_or_create("bg");
+    let fg_id = state.layers_mut().resolve_or_create("fg");
+    // Submit sprites
+    let sprites = vec![
+        SpriteData { entity_id: 1, texture_id: 2, uv: [0.0, 0.0, 1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0], z: 0.0, layer_id: bg_id },
+        SpriteData { entity_id: 2, texture_id: 1, uv: [0.0, 0.0, 1.0, 1.0], color: [1.0, 1.0, 1.0, 1.0], z: 0.0, layer_id: fg_id },
+    ];
+    state.set_sprites_from_slice(&sprites)?;
+
+    let data = renderer.render_to_virtual_canvas(&state)?;
+    let fb = FramebufferReader::new(&data, 320, 180);
+    // Foreground red should appear at the center pixel
+    let px = fb.get_pixel(160, 90);
+    assert!(pixel_matches(px, [255, 0, 0, 255], 5), "Top pixel should be red due to layer order");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_camera_moves_pixels_from_lua() -> Result<()> {
+    let harness = E2ETestHarness::new();
+    // Base script draws a red 16x16 square at center
+    let script_base = r#"
+        local e = engine.create_entity()
+        local tex = engine.load_texture("dummy.png")
+        local red = engine.rgba(255,0,0,255)
+        function on_start()
+            engine.set_render_mode("retro")
+            engine.set_clear_color(0.0, 0.0, 0.0, 1.0)
+        end
+        function on_update(dt)
+            engine.begin_frame()
+            engine.sprite{ entity=e, texture=tex, pos={160,90}, size=16, color=red, uv={0,0,1,1} }
+            engine.end_frame()
+        end
+    "#;
+    // Camera at 0,0
+    let fb0 = harness.execute_script(script_base, "cam0").await?;
+    // Same drawing, but move camera by +10 on X
+    let script_cam = r#"
+        local e = engine.create_entity()
+        local tex = engine.load_texture("dummy.png")
+        local red = engine.rgba(255,0,0,255)
+        function on_start()
+            engine.set_render_mode("retro")
+            engine.set_clear_color(0.0, 0.0, 0.0, 1.0)
+            engine.camera_set{ x=10, y=0 }
+        end
+        function on_update(dt)
+            engine.begin_frame()
+            engine.sprite{ entity=e, texture=tex, pos={160,90}, size=16, color=red, uv={0,0,1,1} }
+            engine.end_frame()
+        end
+    "#;
+    let fb1 = harness.execute_script(script_cam, "cam10").await?;
+
+    let a = FramebufferReader::new(&fb0, 320, 180);
+    let b = FramebufferReader::new(&fb1, 320, 180);
+    // Center pixel is red at cam 0
+    assert!(pixel_matches(a.get_pixel(160, 90), [255,0,0,255], 5));
+    // After moving camera +10, sprite appears 10px left: center is black, left is red
+    assert!(pixel_matches(b.get_pixel(160, 90), [0,0,0,255], 5));
+    assert!(pixel_matches(b.get_pixel(150, 90), [255,0,0,255], 5));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_layers_order_from_lua() -> Result<()> {
+    let harness = E2ETestHarness::new();
+    // Define bg and fg, draw two overlapping sprites in reverse emit order
+    let script = r#"
+        local e1, e2 = engine.create_entity(), engine.create_entity()
+        local red = engine.rgba(255,0,0,255)
+        local blue = engine.rgba(0,0,255,255)
+        local tex = engine.load_texture("dummy.png")
+        function on_start()
+            engine.set_render_mode("retro")
+            engine.set_clear_color(0.0,0.0,0.0,1.0)
+            engine.layer_define("bg", { order=-100 })
+            engine.layer_define("fg", { order=100 })
+        end
+        function on_update(dt)
+            engine.begin_frame()
+            -- Intentionally emit foreground first, then background
+            engine.sprite{ entity=e1, texture=tex, layer="fg", pos={160,90}, size=16, color=blue, uv={0,0,1,1}, z=0 }
+            engine.sprite{ entity=e2, texture=tex, layer="bg", pos={160,90}, size=16, color=red,  uv={0,0,1,1}, z=0 }
+            engine.end_frame()
+        end
+    "#;
+    let fb = harness.execute_script(script, "layers").await?;
+    let f = FramebufferReader::new(&fb, 320, 180);
+    // Pixel at overlap should be blue (foreground) regardless of emit order
+    assert!(pixel_matches(f.get_pixel(160, 90), [0,0,255,255], 5));
     Ok(())
 }
 

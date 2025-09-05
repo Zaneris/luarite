@@ -1094,7 +1094,7 @@ impl SpriteRenderer {
         // Update transforms
         self.set_transforms_v2(engine_state.get_transforms())?;
 
-        // Sort sprites by z-coordinate first, then group consecutive sprites with same texture
+        // Sort sprites by (layer order, z), then group consecutive sprites with same texture
         self.batches.clear();
         let sprites = engine_state.get_sprites();
 
@@ -1103,12 +1103,24 @@ impl SpriteRenderer {
             .iter()
             .filter(|sd| self.transforms.contains_key(&sd.entity_id))
             .collect();
-        sorted_sprites.sort_by(|a, b| a.z.partial_cmp(&b.z).unwrap_or(std::cmp::Ordering::Equal));
+        let layers = engine_state.layers();
+        sorted_sprites.sort_by(|a, b| {
+            let ao = layers.order_of(a.layer_id);
+            let bo = layers.order_of(b.layer_id);
+            match ao.cmp(&bo) {
+                std::cmp::Ordering::Equal => a
+                    .z
+                    .partial_cmp(&b.z)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+                other => other,
+            }
+        });
 
         let mut sprite_idx = 0usize;
         let mut current_batch_texture = None;
         let mut current_batch_start = 0u32;
 
+        let (cam_x, cam_y) = engine_state.camera_xy();
         for sd in sorted_sprites.into_iter() {
             // Ensure texture and bind group cache
             if let Some(bytes) = engine_state.get_texture(sd.texture_id) {
@@ -1134,10 +1146,34 @@ impl SpriteRenderer {
                     current_batch_start = self.sprite_indices.len() as u32;
                 }
 
+                // Compute per-layer camera offset and optional retro snapping
+                let (px, py) = {
+                    let l = layers.get(sd.layer_id);
+                    // Defaults if layer missing
+                    let (parx, pary, ss, sx, sy) = if let Some(layer) = l {
+                        (layer.parallax_x, layer.parallax_y, layer.screen_space, layer.scroll_x, layer.scroll_y)
+                    } else {
+                        (1.0, 1.0, false, 0.0, 0.0)
+                    };
+                    let (ex, ey) = if ss {
+                        (0.0, 0.0)
+                    } else {
+                        (cam_x * parx + sx, cam_y * pary + sy)
+                    };
+                    let mut px = transform.position.x - ex;
+                    let mut py = transform.position.y - ey;
+                    if matches!(self.virtual_mode, crate::state::VirtualResolution::Retro320x180) {
+                        // Round to integer pixels on the virtual canvas to avoid shimmer
+                        px = px.round();
+                        py = py.round();
+                    }
+                    (px, py)
+                };
+
                 let sprite_instance = SpriteInstance {
                     entity_id: sd.entity_id,
                     texture_id: sd.texture_id,
-                    position: transform.position,
+                    position: glam::Vec2::new(px, py),
                     rotation: transform.rotation,
                     size: transform.size, // Use direct pixel size
                     uv_rect: Vec4::new(sd.uv[0], sd.uv[1], sd.uv[2], sd.uv[3]),

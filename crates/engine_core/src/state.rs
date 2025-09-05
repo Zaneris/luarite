@@ -9,6 +9,7 @@ pub struct SpriteData {
     pub uv: [f32; 4],    // u0, v0, u1, v1
     pub color: [f32; 4], // r, g, b, a
     pub z: f32,          // z-index for sorting
+    pub layer_id: u32,   // layer handle for ordering (0 = default "main")
 }
 
 /// Central engine state that owns all game resources
@@ -45,6 +46,13 @@ pub struct EngineState {
 
     // Virtual/internal render resolution mode
     virtual_mode: VirtualResolution,
+
+    // Simple camera (position only for v0)
+    camera_x: f32,
+    camera_y: f32,
+
+    // Layers registry (simple: name -> id, id -> Layer)
+    layers: Layers,
 }
 
 impl EngineState {
@@ -63,6 +71,9 @@ impl EngineState {
             window_height: 1080,
             clear_color: [0.0, 0.0, 0.0, 1.0],
             virtual_mode: VirtualResolution::Hd1920x1080,
+            camera_x: 0.0,
+            camera_y: 0.0,
+            layers: Layers::with_defaults(),
         }
     }
 
@@ -231,6 +242,7 @@ impl EngineState {
                     uv: [0.0; 4],
                     color: [0.0; 4],
                     z: 0.0,
+                    layer_id: 0,
                 },
             );
         }
@@ -340,4 +352,85 @@ impl Default for EngineState {
 pub enum VirtualResolution {
     Retro320x180,
     Hd1920x1080,
+}
+
+// ---- Layers (minimal v0) ----
+#[derive(Debug, Clone)]
+pub struct Layer {
+    pub name: String,
+    pub order: i32,
+    pub parallax_x: f32,
+    pub parallax_y: f32,
+    pub screen_space: bool,
+    pub visible: bool,
+    pub shake_factor: f32,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+}
+
+#[derive(Debug, Default)]
+pub struct Layers {
+    by_name: HashMap<String, u32>,
+    vec: Vec<Layer>,
+}
+
+impl Layers {
+    pub fn with_defaults() -> Self {
+        let mut l = Layers { by_name: HashMap::new(), vec: Vec::new() };
+        l.define_or_update("main".to_string(), 0);
+        l
+    }
+    pub fn define_or_update(&mut self, name: String, order: i32) -> u32 {
+        if let Some(&id) = self.by_name.get(&name) {
+            if let Some(layer) = self.vec.get_mut(id as usize) {
+                layer.order = order;
+            }
+            return id;
+        }
+        let id = self.vec.len() as u32;
+        self.vec.push(Layer {
+            name: name.clone(),
+            order,
+            parallax_x: 1.0,
+            parallax_y: 1.0,
+            screen_space: false,
+            visible: true,
+            shake_factor: 1.0,
+            scroll_x: 0.0,
+            scroll_y: 0.0,
+        });
+        self.by_name.insert(name, id);
+        id
+    }
+    pub fn resolve_or_create(&mut self, name: &str) -> u32 {
+        if let Some(&id) = self.by_name.get(name) { return id; }
+        self.define_or_update(name.to_string(), 0)
+    }
+    pub fn order_of(&self, id: u32) -> i32 {
+        self.vec.get(id as usize).map(|l| l.order).unwrap_or(0)
+    }
+    pub fn get(&self, id: u32) -> Option<&Layer> { self.vec.get(id as usize) }
+    pub fn by_name_mut(&mut self, name: &str) -> Option<&mut Layer> {
+        let id = *self.by_name.get(name)? as usize;
+        self.vec.get_mut(id)
+    }
+    pub fn clone_from(&mut self, other: &Layers) {
+        self.by_name = other.by_name.clone();
+        self.vec = other.vec.clone();
+    }
+}
+
+impl EngineState {
+    // Camera (v0)
+    pub fn set_camera_xy(&mut self, x: f32, y: f32) {
+        self.camera_x = x;
+        self.camera_y = y;
+    }
+    pub fn camera_xy(&self) -> (f32, f32) {
+        (self.camera_x, self.camera_y)
+    }
+
+    // Layers mutation/access for host
+    pub fn layers_mut(&mut self) -> &mut Layers { &mut self.layers }
+    pub fn layers(&self) -> &Layers { &self.layers }
 }

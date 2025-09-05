@@ -16,6 +16,7 @@ local BASE_VX, BASE_VY   = 120.0, 90.0
 
 -- Entities/handles/state
 local background, paddle_l, paddle_r, ball, tex, atlas
+local cam_x, cam_y = 0.0, 0.0
 local px_l, py_l = 40.0, 0.0
 local px_r, py_r = 0.0, 0.0
 local bx, by     = 0.0, 0.0
@@ -52,6 +53,13 @@ function on_start()
   -- Explicitly set background to black and use retro virtual resolution (320x180)
   engine.set_clear_color(0.0, 0.0, 0.0)
   engine.set_render_mode("retro")
+  -- Define simple layers: background then main
+  engine.layer_define("bg",   { order = -100 })
+  engine.layer_define("main", { order = 0 })
+  -- Give background a gentle parallax so it moves slower than the camera
+  engine.layer_set("bg", { parallax = {0.5, 0.5} })
+  -- One-time hint for controls
+  engine.hud_printf("Camera: A/D=Left/Right, Q/E=Up/Down | BG parallax=0.5")
   background = engine.create_entity()
   paddle_l = engine.create_entity()
   paddle_r = engine.create_entity()
@@ -89,6 +97,15 @@ function on_update(dt)
   if bx < -20 then score_r = score_r + 1; reset_ball()
   elseif bx > w + 20 then score_l = score_l + 1; reset_ball() end
 
+  -- Camera controls (A/D = left/right, Q/E = up/down)
+  local cdx = axis(inp, K.KeyD, K.KeyA)
+  local cdy = axis(inp, K.KeyE, K.KeyQ)
+  cam_x = cam_x + (cdx * 80.0) * dt
+  cam_y = cam_y + (cdy * 80.0) * dt
+  engine.camera_set{ x = cam_x, y = cam_y }
+  -- Slowly scroll background for subtle motion
+  -- engine.layer_scroll("bg", 8.0 * dt, 0.0)
+
   -- Draw using sugar API
   engine.begin_frame()
   
@@ -96,6 +113,7 @@ function on_update(dt)
   engine.sprite{
     entity = background,
     texture = tex,
+    layer = "bg",
     pos = {w*0.5, h*0.5},
     size = {w, h},
     color = bg_color,
@@ -108,6 +126,7 @@ function on_update(dt)
     engine.sprite{
       entity = paddle_l,
       atlas = {ref = atlas, name = "paddle"},
+      layer = "main",
       pos = {px_l, py_l},
       size = {PADDLE_W, PADDLE_H},
       color = paddle_l_color,
@@ -117,6 +136,7 @@ function on_update(dt)
     engine.sprite{
       entity = paddle_l,
       texture = tex,
+      layer = "main",
       pos = {px_l, py_l},
       size = {PADDLE_W, PADDLE_H},
       color = paddle_l_color,
@@ -130,6 +150,7 @@ function on_update(dt)
     engine.sprite{
       entity = paddle_r,
       atlas = {ref = atlas, name = "paddle"},
+      layer = "main",
       pos = {px_r, py_r},
       size = {PADDLE_W, PADDLE_H},
       color = paddle_r_color,
@@ -139,6 +160,7 @@ function on_update(dt)
     engine.sprite{
       entity = paddle_r,
       texture = tex,
+      layer = "main",
       pos = {px_r, py_r},
       size = {PADDLE_W, PADDLE_H},
       color = paddle_r_color,
@@ -152,6 +174,7 @@ function on_update(dt)
     engine.sprite{
       entity = ball,
       atlas = {ref = atlas, name = "ball"},
+      layer = "main",
       pos = {bx, by},
       size = BALL_SIZE,
       color = ball_color,
@@ -161,6 +184,7 @@ function on_update(dt)
     engine.sprite{
       entity = ball,
       texture = tex,
+      layer = "main",
       pos = {bx, by},
       size = BALL_SIZE,
       color = ball_color,

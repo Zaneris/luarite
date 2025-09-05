@@ -113,6 +113,7 @@ engine.sprite{
 - **Sugar API** — Express your vision with readable, declarative sprite calls
 - **Typed Buffers** — High-performance batch rendering for advanced use cases
 - **Atlas Support** — Efficient texture atlasing with named sprites
+ - **Camera + Layers** — Simple camera controls with layer ordering and parallax
 
 ### 🔐 Rock-Solid Foundation
 - **Deterministic** — Perfect for replays, testing, and competitive games
@@ -153,6 +154,35 @@ local wobble = math.sin(engine.time() * 3) * 10
 engine.seed(12345)
 local random_x = engine.random_range(0, 320)
 ```
+
+### Camera & Layers
+Phase 1 introduces a simple camera and minimal layers that already enable parallax side‑scrollers while staying pixel‑perfect in retro mode.
+
+```lua
+-- Camera: set or move in world units
+engine.camera_set({ x = 32, y = 0 })
+-- engine.camera_move(dx, dy) coming soon
+
+-- Define ordered layers (higher order draws on top)
+engine.layer_define("bg",   { order = -100 })
+engine.layer_define("main", { order = 0 })
+
+-- Parallax and scroll (optional)
+engine.layer_set("bg", { parallax = {0.5, 0.5} })
+engine.layer_scroll("bg", 8.0 * dt, 0.0)
+
+engine.begin_frame()
+-- Background draws slower than camera due to parallax
+engine.sprite{ layer = "bg",   entity = bg,   texture = tex, pos = {160, 90}, size = {320, 180}, color = engine.rgba(26,26,26,255), uv = {0,0,1,1}, z = -1 }
+-- Gameplay layer (default if layer omitted)
+engine.sprite{ layer = "main", entity = hero, texture = tex, pos = {hero_x, hero_y}, size = 32, color = engine.rgba(255,255,255,255), uv = {0,0,1,1}, z = 0 }
+engine.end_frame()
+```
+
+Notes:
+- Retro mode snaps final sprite positions to integer pixels to avoid shimmer.
+- Parallax is applied by adjusting the effective camera for each layer.
+- The current metrics HUD overlays the presentation surface (top‑left) and is separate from game layers; a proper UI layer over the virtual canvas will come later.
 
 ## 🏗️ Advanced Usage
 
